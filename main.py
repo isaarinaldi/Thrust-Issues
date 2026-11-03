@@ -1,16 +1,42 @@
+import csv
 import math
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TypedDict
 
+import numpy as np
 import yaml
+
+from eckert_data import eckert_coefficients
+
+
+class DesignResult(TypedDict):
+    omega_s: float
+    rpm: float
+    omega_rad_s: float
+    D_tip_m: float
+    D_hub_m: float
+    tip_clearance_mm: float
+    chi: float
+    chi_opt: float
+    phi: float
+    phi_opt: float
+    psi: float
+    psi_opt: float
+    phi_deviation_pct: float
+    psi_deviation_pct: float
+    c_m_m_s: float
+    U_tip_m_s: float
+    mach_relative: float
+    mach_absolute: float
+    mach_max: float
+    status: str
 
 
 def _read_number(config: Mapping[str, object], key: str) -> float:
-    try:
-        value = config[key]
-    except KeyError:
-        raise ValueError(f"Missing required configuration value: {key}") from None
-
+    if key not in config:
+        raise ValueError(f"Missing required configuration value: {key}")
+    value = config[key]
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"Configuration value {key!r} must be a number.")
     try:
@@ -22,159 +48,348 @@ def _read_number(config: Mapping[str, object], key: str) -> float:
     return number
 
 
-def _print_velocity_triangles(
-    config: Mapping[str, object], flow_rate: float, specific_work: float, omega: float
-) -> None:
-    work_done_factor = _read_number(config, "work_done_factor")
-    tip_diameter = _read_number(config, "tip_diameter_m")
-    hub_to_tip_ratio = _read_number(config, "hub_to_tip_ratio")
-    section_count_value = _read_number(config, "number_of_sections")
-    max_tip_diameter = _read_number(config, "max_tip_diameter_m")
-    speed_of_sound = _read_number(config, "speed_of_sound_m_s")
-    max_mach_number = _read_number(config, "max_mach_number")
+def _read_integer(config: Mapping[str, object], key: str) -> int:
+    value = _read_number(config, key)
+    if not value.is_integer():
+        raise ValueError(f"Configuration value {key!r} must be an integer.")
+    return int(value)
 
-    if work_done_factor <= 0:
-        raise ValueError("work_done_factor must be greater than zero.")
-    if tip_diameter <= 0 or tip_diameter > max_tip_diameter:
+
+def _require_positive_finite(name: str, value: float) -> None:
+    if not math.isfinite(value) or value <= 0:
         raise ValueError(
-            "tip_diameter_m must be greater than zero and at most max_tip_diameter_m."
+            f"Configuration values produce an invalid {name}; check their magnitudes."
         )
-    if not 0 < hub_to_tip_ratio < 1:
-        raise ValueError("hub_to_tip_ratio must be greater than zero and less than one.")
-    if not section_count_value.is_integer() or section_count_value < 2:
-        raise ValueError("number_of_sections must be an integer of at least two.")
-    if speed_of_sound <= 0 or max_mach_number <= 0:
-        raise ValueError("speed_of_sound_m_s and max_mach_number must be positive.")
 
-    section_count = int(section_count_value)
-    r_tip = tip_diameter / 2
-    r_hub = hub_to_tip_ratio * r_tip
-    annulus_area = math.pi * (r_tip**2 - r_hub**2)
-    c_m = flow_rate / annulus_area
-    u_tip = omega * r_tip
-    c_theta2_tip = specific_work / (work_done_factor * u_tip)
-    radii = (
-        r_hub + (r_tip - r_hub) * index / (section_count - 1)
-        for index in range(section_count)
+
+def preliminary_design(
+    omega_s: float,
+    *,
+    flow_rate: float,
+    specific_head: float,
+    specific_work: float,
+    work_done_factor: float,
+    tip_diameter: float,
+    max_tip_diameter: float,
+    speed_of_sound: float,
+    mach_limit: float,
+    section_count: int,
+) -> DesignResult:
+    phi_opt, psi_opt, chi = eckert_coefficients(omega_s)
+    angular_velocity = omega_s * specific_head**0.75 / math.sqrt(flow_rate)
+    rpm = angular_velocity * 60 / (2 * math.pi)
+    tip_radius = tip_diameter / 2
+    tip_speed = angular_velocity * tip_radius
+
+    hub_diameter = chi * tip_diameter
+    hub_radius = hub_diameter / 2
+    annulus_area = math.pi / 4 * (tip_diameter**2 - hub_diameter**2)
+    axial_velocity = flow_rate / annulus_area
+
+    psi = specific_head / tip_speed**2
+    phi = axial_velocity / tip_speed
+    psi_deviation = 100 * (psi / psi_opt - 1)
+    phi_deviation = 100 * (phi / phi_opt - 1)
+    outlet_swirl_tip = specific_work / (work_done_factor * tip_speed)
+
+    max_relative_speed = 0.0
+    max_absolute_speed = 0.0
+    for index in range(section_count):
+        radius = hub_radius + (tip_radius - hub_radius) * index / (section_count - 1)
+        blade_speed = angular_velocity * radius
+        outlet_swirl = outlet_swirl_tip * tip_radius / radius
+        inlet_relative_speed = math.hypot(axial_velocity, blade_speed)
+        outlet_relative_speed = math.hypot(
+            axial_velocity, blade_speed - outlet_swirl
+        )
+        outlet_absolute_speed = math.hypot(axial_velocity, outlet_swirl)
+        max_relative_speed = max(
+            max_relative_speed, inlet_relative_speed, outlet_relative_speed
+        )
+        max_absolute_speed = max(
+            max_absolute_speed, axial_velocity, outlet_absolute_speed
+        )
+
+    mach_relative = max_relative_speed / speed_of_sound
+    mach_absolute = max_absolute_speed / speed_of_sound
+    mach_max = max(mach_relative, mach_absolute)
+    geometry_ok = 0 < hub_diameter < tip_diameter <= max_tip_diameter
+    mach_ok = mach_max < mach_limit
+
+    calculated_values = (
+        ("angular velocity", angular_velocity),
+        ("rotational speed", rpm),
+        ("tip speed", tip_speed),
+        ("annulus area", annulus_area),
+        ("axial velocity", axial_velocity),
+        ("flow coefficient", phi),
+        ("head coefficient", psi),
+        ("relative Mach number", mach_relative),
+        ("absolute Mach number", mach_absolute),
     )
+    for name, value in calculated_values:
+        _require_positive_finite(name, value)
+    if not math.isfinite(phi_deviation) or not math.isfinite(psi_deviation):
+        raise ValueError("Configuration values produce invalid coefficient deviations.")
 
-    print("\nFREE-VORTEX VELOCITY TRIANGLES")
-    print("\nMACH NUMBER VERIFICATION")
-    for index, radius in enumerate(radii):
-        blade_speed = omega * radius
-        c_theta2 = c_theta2_tip * r_tip / radius
-        w1 = math.hypot(c_m, blade_speed)
-        w2 = math.hypot(c_m, blade_speed - c_theta2)
-        w_mean = math.hypot(c_m, blade_speed - c_theta2 / 2)
-        beta1 = math.degrees(math.atan2(c_m, blade_speed))
-        beta2 = math.degrees(math.atan2(c_m, blade_speed - c_theta2))
+    return {
+        "omega_s": float(omega_s),
+        "rpm": rpm,
+        "omega_rad_s": angular_velocity,
+        "D_tip_m": tip_diameter,
+        "D_hub_m": hub_diameter,
+        "tip_clearance_mm": (max_tip_diameter - tip_diameter) * 500,
+        "chi": chi,
+        "chi_opt": chi,
+        "phi": phi,
+        "phi_opt": phi_opt,
+        "psi": psi,
+        "psi_opt": psi_opt,
+        "phi_deviation_pct": phi_deviation,
+        "psi_deviation_pct": psi_deviation,
+        "c_m_m_s": axial_velocity,
+        "U_tip_m_s": tip_speed,
+        "mach_relative": mach_relative,
+        "mach_absolute": mach_absolute,
+        "mach_max": mach_max,
+        "status": "PASS" if geometry_ok and mach_ok else "FAIL",
+    }
 
-        print(f"\nSECTION {index + 1}")
-        print(f"Radius: {radius:.3f} m")
-        print(f"Peripheral speed: {blade_speed:.2f} m/s")
-        print(f"Outlet swirl: {c_theta2:.2f} m/s")
-        print(f"Inlet relative velocity: {w1:.2f} m/s")
-        print(f"Outlet relative velocity: {w2:.2f} m/s")
-        print(f"Mean relative velocity: {w_mean:.2f} m/s")
-        print(f"Beta 1: {beta1:.2f} deg")
-        print(f"Beta 2: {beta2:.2f} deg")
 
-        mach_inlet = w1 / speed_of_sound
-        mach_outlet = w2 / speed_of_sound
-        max_relative_mach = max(mach_inlet, mach_outlet)
-        print(f"Inlet Mach number: {mach_inlet:.3f}")
-        print(f"Outlet Mach number: {mach_outlet:.3f}")
-        print(f"Maximum relative Mach number: {max_relative_mach:.3f}")
-        if max_relative_mach >= max_mach_number:
-            raise ValueError(
-                f"Mach number limit exceeded at section {index + 1}."
-            )
+def calculate_velocity_triangles(
+    design: DesignResult,
+    *,
+    specific_work: float,
+    work_done_factor: float,
+    speed_of_sound: float,
+) -> dict[str, dict[str, float]]:
+    angular_velocity = design["omega_rad_s"]
+    tip_radius = design["D_tip_m"] / 2
+    hub_radius = design["D_hub_m"] / 2
+    axial_velocity = design["c_m_m_s"]
+    tip_speed = design["U_tip_m_s"]
+    outlet_swirl_tip = specific_work / (work_done_factor * tip_speed)
+    radii = {
+        "Hub": hub_radius,
+        "Mean": (hub_radius + tip_radius) / 2,
+        "Tip": tip_radius,
+    }
+    triangles: dict[str, dict[str, float]] = {}
 
-        work_check = work_done_factor * blade_speed * c_theta2
+    for name, radius in radii.items():
+        blade_speed = angular_velocity * radius
+        outlet_swirl = outlet_swirl_tip * tip_radius / radius
+        inlet_relative_speed = math.hypot(axial_velocity, blade_speed)
+        outlet_relative_speed = math.hypot(
+            axial_velocity, blade_speed - outlet_swirl
+        )
+        outlet_absolute_speed = math.hypot(axial_velocity, outlet_swirl)
+        work_check = work_done_factor * blade_speed * outlet_swirl
         if not math.isclose(specific_work, work_check, rel_tol=1e-9):
-            raise ValueError(f"Euler work check failed at section {index + 1}.")
+            raise ValueError(f"Euler work check failed at {name} section.")
 
-    print("\nMach number check: PASSED")
+        triangles[name] = {
+            "radius": radius,
+            "U": blade_speed,
+            "c_m": axial_velocity,
+            "c_theta2": outlet_swirl,
+            "c1": axial_velocity,
+            "c2": outlet_absolute_speed,
+            "c_inf": math.hypot(axial_velocity, outlet_swirl / 2),
+            "w1": inlet_relative_speed,
+            "w2": outlet_relative_speed,
+            "w_inf": math.hypot(
+                axial_velocity, blade_speed - outlet_swirl / 2
+            ),
+            "alpha1": 90.0,
+            "alpha2": math.degrees(math.atan2(axial_velocity, outlet_swirl)),
+            "beta1": math.degrees(math.atan2(axial_velocity, blade_speed)),
+            "beta2": math.degrees(
+                math.atan2(axial_velocity, blade_speed - outlet_swirl)
+            ),
+            "beta_inf": math.degrees(
+                math.atan2(axial_velocity, blade_speed - outlet_swirl / 2)
+            ),
+            "Ma1": inlet_relative_speed / speed_of_sound,
+            "Ma2": outlet_relative_speed / speed_of_sound,
+        }
+
+    return triangles
 
 
-def main(config_path: Path | None = None) -> None:
+def main(
+    config_path: Path | None = None, output_path: Path | None = None
+) -> None:
+    project_dir = Path(__file__).resolve().parent
     if config_path is None:
-        config_path = Path(__file__).resolve().with_name("config.yaml")
+        config_path = project_dir / "config.yaml"
 
     with config_path.open("r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
     if not isinstance(config, Mapping):
-        raise ValueError(
-            f"Configuration file {config_path} must contain a YAML mapping."
-        )
+        raise ValueError(f"Configuration file {config_path} must contain a YAML mapping.")
 
-    F_nom = _read_number(config, "nominal_thrust_N")
-    rho = _read_number(config, "air_density_kg_m3")
-    V_j = _read_number(config, "jet_velocity_m_s")
-    V_amb = _read_number(config, "ambient_velocity_m_s")
-    eta_rotor = _read_number(config, "rotor_efficiency_initial")
-    Omega_s = _read_number(config, "specific_speed")
+    nominal_thrust = _read_number(config, "nominal_thrust_N")
+    air_density = _read_number(config, "air_density_kg_m3")
+    jet_velocity = _read_number(config, "jet_velocity_m_s")
+    ambient_velocity = _read_number(config, "ambient_velocity_m_s")
+    rotor_efficiency = _read_number(config, "rotor_efficiency_initial")
+    work_done_factor = _read_number(config, "work_done_factor")
+    max_tip_diameter = _read_number(config, "max_tip_diameter_m")
+    diameter_fraction = _read_number(config, "tip_diameter_fraction")
+    speed_min = _read_number(config, "specific_speed_min")
+    speed_max = _read_number(config, "specific_speed_max")
+    speed_points = _read_integer(config, "specific_speed_points")
+    speed_of_sound = _read_number(config, "speed_of_sound_m_s")
+    mach_limit = _read_number(config, "max_mach_number")
+    section_count = _read_integer(config, "number_of_sections")
 
-    if F_nom <= 0:
-        raise ValueError("nominal_thrust_N must be greater than zero.")
-    if rho <= 0:
-        raise ValueError("air_density_kg_m3 must be greater than zero.")
-    if V_amb < 0 or V_j <= V_amb:
+    if nominal_thrust <= 0 or air_density <= 0:
+        raise ValueError("nominal_thrust_N and air_density_kg_m3 must be positive.")
+    if ambient_velocity < 0 or jet_velocity <= ambient_velocity:
         raise ValueError(
             "Velocities must satisfy 0 <= ambient_velocity_m_s < jet_velocity_m_s."
         )
-    if not 0 < eta_rotor <= 1:
+    if not 0 < rotor_efficiency <= 1:
+        raise ValueError("rotor_efficiency_initial must be greater than zero and at most one.")
+    if work_done_factor <= 0:
+        raise ValueError("work_done_factor must be greater than zero.")
+    if max_tip_diameter <= 0 or not 0 < diameter_fraction < 1:
         raise ValueError(
-            "rotor_efficiency_initial must be greater than 0 and at most 1."
+            "max_tip_diameter_m must be positive and tip_diameter_fraction "
+            "must be greater than zero and less than one."
         )
-    if Omega_s <= 0:
-        raise ValueError("specific_speed must be greater than zero.")
+    if not 2.5 <= speed_min < speed_max <= 5.0:
+        raise ValueError(
+            "Specific speed bounds must satisfy 2.5 <= minimum < maximum <= 5.0 "
+            "to stay within the Eckert reference data."
+        )
+    if speed_points < 2 or section_count < 3:
+        raise ValueError("specific_speed_points must be at least two and "
+                         "number_of_sections at least three.")
+    if speed_of_sound <= 0 or not 0 < mach_limit < 1:
+        raise ValueError("Invalid speed_of_sound_m_s or max_mach_number.")
 
-    # This momentum-only thrust model assumes equal inlet and outlet static
-    # pressures, so pressure thrust is neglected.
-    delta_V = V_j - V_amb
-    mean_velocity = V_j / 2 + V_amb / 2
+    delta_velocity = jet_velocity - ambient_velocity
+    mean_velocity = jet_velocity / 2 + ambient_velocity / 2
     try:
-        # Sequential division and the factored head avoid unnecessary
-        # intermediate overflow and cancellation.
-        Q = F_nom / rho / delta_V
-        gH = delta_V * mean_velocity
-        L = gH / eta_rotor
-        P_rotor = F_nom * mean_velocity / eta_rotor
+        flow_rate = nominal_thrust / air_density / delta_velocity
+        specific_head = delta_velocity * mean_velocity
+        specific_work = specific_head / rotor_efficiency
+        rotor_power = nominal_thrust * mean_velocity / rotor_efficiency
+    except (OverflowError, ZeroDivisionError) as error:
+        raise ValueError("Configuration values exceed the supported numeric range.") from error
 
-        # Dimensionless SI convention: Omega_s = omega * sqrt(Q) / gH**0.75.
-        omega = Omega_s * (gH**0.75) / math.sqrt(Q)
-        n_rpm = omega * 60 / (2 * math.pi)
+    for name, value in (
+        ("volumetric flow rate", flow_rate),
+        ("specific head", specific_head),
+        ("specific work", specific_work),
+        ("rotor power", rotor_power),
+    ):
+        _require_positive_finite(name, value)
+
+    tip_diameter = diameter_fraction * max_tip_diameter
+    _require_positive_finite("tip diameter", tip_diameter)
+    specific_speeds = np.linspace(speed_min, speed_max, speed_points)
+    try:
+        results = [
+            preliminary_design(
+                float(omega_s),
+                flow_rate=flow_rate,
+                specific_head=specific_head,
+                specific_work=specific_work,
+                work_done_factor=work_done_factor,
+                tip_diameter=tip_diameter,
+                max_tip_diameter=max_tip_diameter,
+                speed_of_sound=speed_of_sound,
+                mach_limit=mach_limit,
+                section_count=section_count,
+            )
+            for omega_s in specific_speeds
+        ]
     except (OverflowError, ZeroDivisionError) as error:
         raise ValueError(
-            "Configuration values produce a result outside the supported numeric range."
+            "Configuration values produce results outside the supported numeric range."
         ) from error
 
-    for name, result in (
-        ("volumetric flow rate", Q),
-        ("specific head", gH),
-        ("specific work", L),
-        ("rotor power", P_rotor),
-        ("angular velocity", omega),
-        ("rotational speed", n_rpm),
-    ):
-        if not math.isfinite(result) or result <= 0:
-            raise ValueError(
-                f"Configuration values produce an invalid {name}; "
-                "check their magnitudes."
-            )
-
-    print("JET FAN - PRELIMINARY DESIGN")
-    print(f"Nominal thrust: {F_nom:.1f} N")
+    print("\nJET FAN - PRELIMINARY DESIGN")
+    print(f"Nominal thrust: {nominal_thrust:.1f} N")
     print("Pressure thrust: neglected (equal inlet/outlet static pressure assumed)")
-    print(f"Volumetric flow rate: {Q:.2f} m³/s")
-    print(f"Specific head: {gH:.2f} J/kg")
-    print(f"Specific work: {L:.2f} J/kg")
-    print(f"Preliminary rotor power: {P_rotor / 1000:.2f} kW")
-    print(f"Specific speed: {Omega_s:.2f}")
-    print(f"Angular velocity: {omega:.2f} rad/s")
-    print(f"Rotational speed: {n_rpm:.2f} rpm")
-    _print_velocity_triangles(config, Q, L, omega)
+    print(f"Volume flow rate: {flow_rate:.2f} m³/s")
+    print(f"Specific head: {specific_head:.2f} J/kg")
+    print(f"Specific work: {specific_work:.2f} J/kg")
+    print(f"Preliminary power: {rotor_power / 1000:.2f} kW")
+    print("\nFIXED GEOMETRY")
+    print(f"Tip diameter: {tip_diameter:.4f} m")
+    print(f"Radial tip clearance: {(max_tip_diameter - tip_diameter) * 500:.2f} mm")
+
+    print("\nSPECIFIC SPEED SEARCH")
+    print(f"{'Omega_s':>8} {'RPM':>8} {'psi':>8} {'phi':>8} {'Mach':>8} {'Status':>8}")
+    for result in results:
+        print(
+            f"{result['omega_s']:8.2f} {result['rpm']:8.1f} "
+            f"{result['psi']:8.3f} {result['phi']:8.3f} "
+            f"{result['mach_max']:8.3f} {result['status']:>8}"
+        )
+
+    if output_path is None:
+        output_path = project_dir / "preliminary_results.csv"
+    with output_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=list(results[0]))
+        writer.writeheader()
+        writer.writerows(dict(result) for result in results)
+    print(f"\nResults saved to: {output_path}")
+
+    feasible = [result for result in results if result["status"] == "PASS"]
+    print(f"Configurations evaluated: {len(results)}")
+    print(f"Passing geometry and Mach checks: {len(feasible)}")
+    if not feasible:
+        print("\nNo configuration passes the checks.")
+        return
+
+    # Compare percentage deviations from the approximate Eckert reference values.
+    selected_design = min(
+        feasible,
+        key=lambda candidate: math.hypot(
+            candidate["psi_deviation_pct"], candidate["phi_deviation_pct"]
+        ),
+    )
+    print(f"Specific speed: {selected_design['omega_s']:.2f}")
+    print(f"Rotational speed: {selected_design['rpm']:.1f} rpm")
+    print(f"Head coefficient (psi): {selected_design['psi']:.4f}")
+    print(f"Flow coefficient (phi): {selected_design['phi']:.4f}")
+    print(f"Hub-to-tip ratio (chi): {selected_design['chi']:.4f}")
+    print(f"Maximum Mach number: {selected_design['mach_max']:.3f}")
+
+    triangles = calculate_velocity_triangles(
+        selected_design,
+        specific_work=specific_work,
+        work_done_factor=work_done_factor,
+        speed_of_sound=speed_of_sound,
+    )
+    print("\n" + "=" * 50)
+    print("VELOCITY TRIANGLES - SELECTED DESIGN")
+    print("=" * 50)
+    print(f"Specific speed: {selected_design['omega_s']:.2f}")
+    print(f"Rotational speed: {selected_design['rpm']:.2f} rpm")
+    for name, data in triangles.items():
+        print(f"\n{name.upper()} SECTION")
+        print(f"Radius: {data['radius']:.4f} m")
+        print(f"Peripheral speed: {data['U']:.2f} m/s")
+        print(f"Axial velocity: {data['c_m']:.2f} m/s")
+        print(f"Outlet swirl: {data['c_theta2']:.2f} m/s")
+        print(f"Absolute inlet velocity: {data['c1']:.2f} m/s")
+        print(f"Absolute outlet velocity: {data['c2']:.2f} m/s")
+        print(f"Relative inlet velocity: {data['w1']:.2f} m/s")
+        print(f"Relative outlet velocity: {data['w2']:.2f} m/s")
+        print(f"Mean relative velocity: {data['w_inf']:.2f} m/s")
+        print(f"Alpha 1: {data['alpha1']:.2f} deg")
+        print(f"Alpha 2: {data['alpha2']:.2f} deg")
+        print(f"Beta 1: {data['beta1']:.2f} deg")
+        print(f"Beta 2: {data['beta2']:.2f} deg")
+        print(f"Beta mean: {data['beta_inf']:.2f} deg")
+        print(f"Mach inlet: {data['Ma1']:.3f}")
+        print(f"Mach outlet: {data['Ma2']:.3f}")
 
 
 if __name__ == "__main__":

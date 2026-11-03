@@ -1,6 +1,6 @@
 
 # JET FAN - PRELIMINARY DESIGN
-# Turbomachinery for Green Energy Transition
+# Thrust-Issues
 
 # Design requirements
 nominal_thrust_N: 1000.0
@@ -11,8 +11,6 @@ air_density_kg_m3: 1.2
 dynamic_viscosity_Pa_s: 1.81e-5
 air_temperature_K: 293.15
 speed_of_sound_m_s: 343.0
-max_mach_number: 0.3
-
 
 # Operating assumptions
 jet_velocity_m_s: 30.0
@@ -22,10 +20,16 @@ ambient_velocity_m_s: 0.0
 rotor_efficiency_initial: 0.80
 work_done_factor: 1.0
 
-# Demonstration design
-specific_speed: 4.5
-tip_diameter_m: 1.120
-hub_to_tip_ratio: 0.50
+# Geometric constraint
+tip_diameter_fraction: 0.995
 
-# Radial discretization
-number_of_sections: 3
+# Specific speed search
+specific_speed_min: 2.5
+specific_speed_max: 5.0
+specific_speed_points: 51
+
+# Preliminary Mach check
+max_mach_number: 0.3
+
+# Radial sections used for Mach screening
+number_of_sections: 21
