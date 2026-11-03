@@ -4,7 +4,7 @@
 
 # Design requirements
 nominal_thrust_N: 1000.0
-max_tip_diameter_m: 1.120
+max_tip_diameter_m: 1.200
 
 # Air properties
 air_density_kg_m3: 1.2
