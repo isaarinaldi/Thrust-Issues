@@ -7,7 +7,7 @@ from typing import TypedDict
 import numpy as np
 import yaml
 
-from eckert_data import eckert_coefficients
+from data.eckert_data import eckert_coefficients
 
 
 class DesignResult(TypedDict):
