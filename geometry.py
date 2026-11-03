@@ -23,9 +23,6 @@ def annulus_geometry(tip_diameter, chi):
 
     chi = D_hub / D_tip
     """
-    _require_positive_finite("tip diameter", tip_diameter)
-    if not math.isfinite(chi) or not 0 < chi < 1:
-        raise ValueError("Hub-to-tip diameter ratio must be between 0 and 1.")
 
     tip_radius = tip_diameter / 2
 
@@ -68,18 +65,6 @@ def maximum_section_speeds(
         No inlet prerotation
         Free vortex at rotor outlet
     """
-    _require_positive_finite("axial velocity", axial_velocity)
-    _require_positive_finite("angular velocity", angular_velocity)
-    _require_positive_finite("hub radius", hub_radius)
-    _require_positive_finite("tip radius", tip_radius)
-    if tip_radius <= hub_radius:
-        raise ValueError("Tip radius must exceed hub radius.")
-    if not math.isfinite(outlet_swirl_tip):
-        raise ValueError("Tip outlet swirl must be finite.")
-    if isinstance(section_count, bool) or not isinstance(section_count, int):
-        raise ValueError("section_count must be an integer.")
-    if section_count < 2:
-        raise ValueError("section_count must be at least 2.")
 
     max_relative_speed = 0.0
     max_absolute_speed = 0.0
@@ -151,12 +136,7 @@ def calculate_velocity_triangles(
         Hub
         Mean
         Tip
-
-    Absolute flow angles are measured from the axial direction.
     """
-    _require_positive_finite("specific work", specific_work)
-    _require_positive_finite("work-done factor", work_done_factor)
-    _require_positive_finite("speed of sound", speed_of_sound)
 
     angular_velocity = design["omega_rad_s"]
 
@@ -255,12 +235,12 @@ def calculate_velocity_triangles(
                 blade_speed - outlet_swirl / 2
             ),
 
-            "alpha1": 0.0,
+            "alpha1": 90.0,
 
             "alpha2": math.degrees(
                 math.atan2(
-                    outlet_swirl,
-                    axial_velocity
+                    axial_velocity,
+                    outlet_swirl
                 )
             ),
 
@@ -295,8 +275,3 @@ def calculate_velocity_triangles(
         }
 
     return triangles
-
-
-def _require_positive_finite(name, value):
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{name} must be positive and finite.")

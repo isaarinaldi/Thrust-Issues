@@ -53,38 +53,6 @@ def _require_positive_finite(name: str, value: float) -> None:
         )
 
 
-def _validate_design_inputs(
-    omega_s: float,
-    flow_rate: float,
-    specific_head: float,
-    specific_work: float,
-    work_done_factor: float,
-    tip_diameter: float,
-    max_tip_diameter: float,
-    speed_of_sound: float,
-    mach_limit: float,
-    section_count: int,
-) -> None:
-    for name, value in (
-        ("specific speed", omega_s),
-        ("flow rate", flow_rate),
-        ("specific head", specific_head),
-        ("specific work", specific_work),
-        ("work-done factor", work_done_factor),
-        ("tip diameter", tip_diameter),
-        ("maximum tip diameter", max_tip_diameter),
-        ("speed of sound", speed_of_sound),
-        ("Mach limit", mach_limit),
-    ):
-        _require_positive_finite(name, value)
-    if not 0 < mach_limit < 1:
-        raise ValueError("Mach limit must be greater than 0 and less than 1.")
-    if isinstance(section_count, bool) or not isinstance(section_count, int):
-        raise ValueError("section_count must be an integer.")
-    if section_count < 2:
-        raise ValueError("section_count must be at least 2.")
-
-
 # ==========================================
 # PRELIMINARY DESIGN
 # ==========================================
@@ -102,18 +70,6 @@ def preliminary_design(
     mach_limit: float,
     section_count: int,
 ) -> DesignResult:
-    _validate_design_inputs(
-        omega_s,
-        flow_rate,
-        specific_head,
-        specific_work,
-        work_done_factor,
-        tip_diameter,
-        max_tip_diameter,
-        speed_of_sound,
-        mach_limit,
-        section_count,
-    )
 
     # --------------------------------------
     # 1. ECKERT REFERENCE COEFFICIENTS
