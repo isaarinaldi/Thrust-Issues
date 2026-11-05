@@ -1,7 +1,8 @@
-kimport yaml
+import yaml
 import csv
 from machine import scelta_profilo, calcola_diffusion_factor, curvatura_iniziale, calcola_incidenza_lieblein, calcola_deviazione_lieblein, curvatura_corretta, convergenza_curvatura, dimensionamento_geometrico, calcola_calettamento, verifica_aerodinamica_finale
 from losses import interpola_curva, interpola_2d
+
 
 # ASSEGNAZIONE SOLIDITA PRELIMINARE
 

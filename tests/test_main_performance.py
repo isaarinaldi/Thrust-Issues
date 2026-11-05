@@ -29,7 +29,7 @@ def ensure_config_exists(config_path: str = "config.yaml") -> bool:
 def test_main_performance_pipeline():
     print("=== TEST COMPLETO DI INTEGRATORE MAIN_PERFORMANCE.PY ===\n")
 
-    config_path = "config.yaml"
+    config_path = "../config.yaml"
     is_temp = ensure_config_exists(config_path)
 
     try:
