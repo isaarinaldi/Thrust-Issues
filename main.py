@@ -518,6 +518,7 @@ def main(
             f"Mach outlet: {data['Ma2']:.3f}"
         )
 
+    return triangles
 
 if __name__ == "__main__":
     main()
