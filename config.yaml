@@ -1,6 +1,6 @@
-
-# JET FAN - PRELIMINARY DESIGN
-# Thrust-Issues
+# ==========================================
+# 1. PRELIMINARY DESIGN
+# ==========================================
 
 # Design requirements
 nominal_thrust_N: 1000.0
@@ -12,11 +12,11 @@ dynamic_viscosity_Pa_s: 1.81e-5
 air_temperature_K: 293.15
 speed_of_sound_m_s: 343.0
 
-# Operating assumptions
+# Operating conditions
 jet_velocity_m_s: 30.0
 ambient_velocity_m_s: 0.0
 
-# Preliminary efficiency assumptions
+# Initial efficiency assumptions
 rotor_efficiency_initial: 0.80
 work_done_factor: 1.0
 
@@ -28,8 +28,6 @@ specific_speed_min: 2.5
 specific_speed_max: 5.0
 specific_speed_points: 51
 
-# Preliminary Mach check
+# Preliminary Mach screening
 max_mach_number: 0.3
-
-# Radial sections used for Mach screening
 number_of_sections: 21

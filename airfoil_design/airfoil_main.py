@@ -1,12 +1,13 @@
 import yaml
 import csv
-from .airfoil_machine import scelta_profilo, calcola_diffusion_factor, curvatura_iniziale, calcola_incidenza_lieblein, calcola_deviazione_lieblein, curvatura_corretta, convergenza_curvatura, dimensionamento_geometrico, calcola_calettamento, verifica_aerodinamica_finale
-from .airfoil_losses import interpola_curva, interpola_2d
-from pathlib import Path
-DATA_DIR = Path(__file__).resolve().parent / "data"
+from machine import scelta_profilo, calcola_diffusion_factor, curvatura_iniziale, calcola_incidenza_lieblein, calcola_deviazione_lieblein, curvatura_corretta, convergenza_curvatura, dimensionamento_geometrico, calcola_calettamento, verifica_aerodinamica_finale
+from losses import interpola_curva, interpola_2d
+
 # ASSEGNAZIONE SOLIDITA PRELIMINARE
 
 
+with open("config.yaml", "r", encoding="utf-8") as file:
+    dati_base = yaml.safe_load(file)
 def progetta(dati):
     profilo, tmax_c, sigma_prog = scelta_profilo(dati)
     print("Profilo selezionato:", profilo)
@@ -20,7 +21,7 @@ def progetta(dati):
     print("Curvatura iniziale:", theta0, "gradi")
 
 
-    with open(DATA_DIR/"lieblein_i0.csv", "r", encoding="utf-8", newline="") as file:
+    with open("data/lieblein_i0.csv", "r", encoding="utf-8", newline="") as file:
         punti_i0 = [
             (float(r["alpha_deg"]), float(r["sigma"]), float(r["i0_10_deg"]))
             for r in csv.DictReader(file)
@@ -33,7 +34,7 @@ def progetta(dati):
     # INTERPOLAZIONE DEL COEFFICIENTE n
 
 
-    with open(DATA_DIR/"lieblein_n.csv", "r", encoding="utf-8", newline="") as file:
+    with open("data/lieblein_n.csv", "r", encoding="utf-8", newline="") as file:
         punti_n = [
             (float(r["alpha_deg"]), float(r["sigma"]), float(r["n"]))
             for r in csv.DictReader(file)
@@ -54,7 +55,7 @@ def progetta(dati):
 
     # 9. PRIMA DEVIAZIONE DI LIEBLEIN
 
-    with open(DATA_DIR/"lieblein_deviazione.csv", "r", encoding="utf-8", newline="") as file:
+    with open("data/lieblein_deviazione.csv", "r", encoding="utf-8", newline="") as file:
         righe_delta = list(csv.DictReader(file))
 
     angoli_delta = []
@@ -69,7 +70,7 @@ def progetta(dati):
         valori_b.append(float(riga["b"]))
 
 
-    with open(DATA_DIR/"lieblein_delta0_sigma.csv", "r", encoding="utf-8", newline="") as file:
+    with open("data/lieblein_delta0_sigma.csv", "r", encoding="utf-8", newline="") as file:
         punti_delta0 = [
             (float(r["alpha_deg"]), float(r["sigma"]), float(r["delta0_10_deg"]))
             for r in csv.DictReader(file)
@@ -134,9 +135,10 @@ def progetta(dati):
                 for r in righe
             ]
 
-    punti_i0 = leggi_superficie(DATA_DIR / "lieblein_i0.csv", "i0_10_deg")
-    punti_n = leggi_superficie(DATA_DIR / "lieblein_n.csv", "n")
-    punti_delta0 = leggi_superficie(DATA_DIR / "lieblein_delta0_sigma.csv", "delta0_10_deg")
+
+    punti_i0 = leggi_superficie("data/lieblein_i0.csv", "i0_10_deg")
+    punti_n = leggi_superficie("data/lieblein_n.csv", "n")
+    punti_delta0 = leggi_superficie("data/lieblein_delta0_sigma.csv", "delta0_10_deg")
 
     i0_eff = interpola_2d(punti_i0, dati["beta1"], sigma_eff)
     n_eff = interpola_2d(punti_n, dati["beta1"], sigma_eff)
@@ -200,31 +202,29 @@ def progetta(dati):
 
 # 16. CICLO ESTERNO DI PROGETTAZIONE
 
-def esegui_airfoil(dati_base):
+soluzione_trovata = False
+sigma_iniziale = dati_base["sigma_prog"]
 
-    soluzione_trovata = False
-    sigma_iniziale = dati_base["sigma_prog"]
+for tentativo in range(dati_base["max_iter_sigma"]):
 
-    for tentativo in range(dati_base["max_iter_sigma"]):
+    sigma = round(
+        sigma_iniziale + tentativo * dati_base["sigma_step"], 6
+    )
 
-        sigma = round(
-            sigma_iniziale + tentativo * dati_base["sigma_step"], 6
-        )
+    if sigma > dati_base["sigma_max"]:
+        break
 
-        if sigma > dati_base["sigma_max"]:
-            break
+    dati_tentativo = dati_base.copy()
+    dati_tentativo["sigma_prog"] = sigma
 
-        dati_tentativo = dati_base.copy()
-        dati_tentativo["sigma_prog"] = sigma
+    print("Tentativo:", tentativo + 1, "Solidita:", sigma)
 
-        print("Tentativo:", tentativo + 1, "Solidita:", sigma)
+    if progetta(dati_tentativo):
+        soluzione_trovata = True
+        break
 
-        if progetta(dati_tentativo):
-            soluzione_trovata = True
-            break
-
-    if not soluzione_trovata:
-        raise ValueError("Nessuna soluzione trovata nei limiti di solidita")
+if not soluzione_trovata:
+    raise ValueError("Nessuna soluzione trovata nei limiti di solidita")
 
 
 
