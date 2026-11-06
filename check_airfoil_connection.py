@@ -7,7 +7,7 @@ from airfoil_design.airfoil_inputs import prepara_input_airfoil
 from airfoil_design.airfoil_main import esegui_airfoil
 
 # ESECUZIONE DEL CODICE PRELIMINARE
-triangles = preliminary_main()
+preliminary_main()
 
 if triangles is None:
     raise ValueError("Nessuna configurazione preliminare valida")

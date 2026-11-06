@@ -227,4 +227,5 @@ if not soluzione_trovata:
     raise ValueError("Nessuna soluzione trovata nei limiti di solidita")
 
 
-
+def esegui_airfoil():
+    return None
