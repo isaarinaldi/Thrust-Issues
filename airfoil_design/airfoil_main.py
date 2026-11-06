@@ -196,7 +196,10 @@ def progetta(dati, tabelle):
         return False
 
 
-def main(config_path: Path | None = None) -> None:
+def main(
+    config_path: Path | None = None,
+    input_data: Mapping[str, object] | None = None,
+) -> bool:
     if config_path is None:
         config_path = PROJECT_DIR / "airfoil_config.yaml"
 
@@ -207,6 +210,11 @@ def main(config_path: Path | None = None) -> None:
             f"Il file di configurazione {config_path} deve contenere "
             "una mappa YAML."
         )
+    dati_base = dict(dati_base)
+    if input_data is not None:
+        if not isinstance(input_data, Mapping):
+            raise TypeError("Gli input aerodinamici devono essere una mappa.")
+        dati_base.update(input_data)
 
     tabelle = {
         "i0": [
@@ -260,11 +268,14 @@ def main(config_path: Path | None = None) -> None:
         print("Tentativo:", tentativo + 1, "Solidita:", sigma)
 
         if progetta(dati_tentativo, tabelle):
-            soluzione_trovata = True
-            break
+            return True
 
-    if not soluzione_trovata:
-        raise ValueError("Nessuna soluzione trovata nei limiti di solidita")
+    raise ValueError("Nessuna soluzione trovata nei limiti di solidita")
+
+
+def esegui_airfoil(dati: Mapping[str, object]) -> bool:
+    """Run the airfoil design using inputs from the preliminary design."""
+    return main(input_data=dati)
 
 
 if __name__ == "__main__":
