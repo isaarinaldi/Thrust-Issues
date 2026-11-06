@@ -74,7 +74,7 @@ def _read_integer(config: Mapping[str, object], key: str) -> int:
 def main(
     config_path: Path | None = None,
     output_path: Path | None = None
-) -> None:
+) -> dict[str, dict[str, float]] | None:
 
     project_dir = Path(__file__).resolve().parent
 

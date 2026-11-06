@@ -1,0 +1,1 @@
+"""Preliminary airfoil design calculations."""

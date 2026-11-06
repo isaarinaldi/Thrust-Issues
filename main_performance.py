@@ -4,190 +4,192 @@ from typing import Any
 import numpy as np
 import yaml
 
-# Import dei moduli per perdite, efficienza e prestazioni complessive
+# Moduli dei colleghi
+from thermo import operating_point
+from machine import preliminary_design
+from geometry import calculate_velocity_triangles
+from airfoil_design.airfoil_inputs import prepara_input_airfoil
+from airfoil_design.airfoil_main import esegui_airfoil
+from airfoil_design.airfoil_machine import dimensionamento_geometrico, scelta_profilo
+
+# Moduli di verifica prestazionale
 from losses import compute_all_Y_loss_coefficients
 from efficiency import calculate_rotor_efficiency
 from overall_performance import calculate_overall_performance
 
-# Import dei moduli dei colleghi per termodinamica, progettazione e triangoli
-from thermo import operating_point
-from machine import preliminary_design
-from geometry import calculate_velocity_triangles
-
 
 def load_config(config_path: str = "config.yaml") -> dict[str, Any]:
-    """
-    Carica il file di configurazione config.yaml.
-    Solleva FileNotFoundError se il file non esiste sul disco.
-    """
     path = Path(config_path)
     if not path.exists():
-        raise FileNotFoundError(f"File di configurazione non trovato: {path.resolve()}")
-
+        raise FileNotFoundError(f"Configuration file not found: {path.resolve()}")
     with open(path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    if not isinstance(config, dict):
-        raise ValueError("Il file config.yaml deve contenere una struttura dizionario/mapping.")
-
-    return config
+        return yaml.safe_load(f)
 
 
 def run_main_performance(config_path: str = "config.yaml") -> dict[str, Any]:
-    """
-    Esegue il ciclo iterativo di convergenza sul rendimento della girante (eta_rot),
-    interfacciandosi con i moduli dei colleghi (thermo, machine, geometry)
-    e calcola le prestazioni complessive finali della macchina.
-    """
     config = load_config(config_path)
 
-    # 1. Parametri di controllo dell'iterazione con valori di fallback sicuri
-    eta_assumed = float(config.get("rotor_efficiency_initial", config.get("initial_eta_guess", 0.80)))
+    # Caricamento configurazione airfoil
+    airfoil_config_path = Path("airfoil_design/airfoil_config.yaml")
+    with open(airfoil_config_path, "r", encoding="utf-8") as f:
+        config_airfoil = yaml.safe_load(f)
+
+    # Parametri di convergenza
+    eta_assumed = float(
+        config.get("rotor_efficiency_initial", config.get("initial_eta_guess", 0.80))
+    )
     tolerance = float(config.get("tolerance", 1e-4))
     max_iter = int(config.get("max_iterations", 50))
     alpha = float(config.get("relaxation_factor", 0.5))
 
-    # Parametri operativi e fisici da config.yaml
-    nominal_thrust = float(config["nominal_thrust_N"])
-    air_density = float(config["air_density_kg_m3"])
-    jet_velocity = float(config["jet_velocity_m_s"])
-    ambient_velocity = float(config["ambient_velocity_m_s"])
-    work_done_factor = float(config["work_done_factor"])
-    max_tip_diameter = float(config["max_tip_diameter_m"])
-    diameter_fraction = float(config["tip_diameter_fraction"])
-    speed_min = float(config["specific_speed_min"])
-    speed_max = float(config["specific_speed_max"])
-    speed_points = int(config["specific_speed_points"])
-    speed_of_sound = float(config["speed_of_sound_m_s"])
-    mach_limit = float(config["max_mach_number"])
-    section_count = int(config["number_of_sections"])
-
-    tip_diameter = diameter_fraction * max_tip_diameter
-
-    print("=" * 65)
-    print("      SIMULAZIONE JET FAN ASSIALE - MAIN PERFORMANCE")
-    print("=" * 65 + "\n")
+    print("=" * 70)
+    print("      AXIAL JET FAN SIMULATION - MAIN PERFORMANCE PIPELINE")
+    print("=" * 70 + "\n")
 
     selected_design: dict[str, Any] = {}
     triangles: dict[str, dict[str, float]] = {}
+    aero_res: dict[str, Any] = {}
     y_results: dict[str, float] = {}
     eff_results: dict[str, float] = {}
+    profile_name: str = "Undefined"
     converged = False
 
-    # Dati aerodinamici provvisori (in attesa del completamento di aerodynamics.py)
-    mock_aero = {"sigma_eff": 1.12, "Z": 12}
-    chord_val = 0.12  # Corda fittizia [m]
-
-    print("-" * 65)
+    print("-" * 70)
     print(f"{'Iter':<6} | {'eta_assumed':<12} | {'eta_calculated':<15} | {'Delta':<12}")
-    print("-" * 65)
+    print("-" * 70)
 
     for k in range(1, max_iter + 1):
-        # A. Punto operativo termodinamico (thermo.py)
+        # 1. Punto operativo termodinamico
         flow_rate, specific_head, specific_work, rotor_power = operating_point(
-            nominal_thrust=nominal_thrust,
-            air_density=air_density,
-            jet_velocity=jet_velocity,
-            ambient_velocity=ambient_velocity,
+            nominal_thrust=float(config["nominal_thrust_N"]),
+            air_density=float(config["air_density_kg_m3"]),
+            jet_velocity=float(config["jet_velocity_m_s"]),
+            ambient_velocity=float(config["ambient_velocity_m_s"]),
             rotor_efficiency=eta_assumed,
         )
 
-        # B. Scansione sulla velocita specifica ed elica ottimale (machine.py)
-        specific_speeds = np.linspace(speed_min, speed_max, speed_points)
+        # 2. Ottimizzazione elica preliminare
+        tip_diameter = float(config["tip_diameter_fraction"]) * float(
+            config["max_tip_diameter_m"]
+        )
+        specific_speeds = np.linspace(
+            float(config["specific_speed_min"]),
+            float(config["specific_speed_max"]),
+            int(config["specific_speed_points"]),
+        )
+
         results = [
             preliminary_design(
                 float(omega_s),
                 flow_rate=flow_rate,
                 specific_head=specific_head,
                 specific_work=specific_work,
-                work_done_factor=work_done_factor,
+                work_done_factor=float(config["work_done_factor"]),
                 tip_diameter=tip_diameter,
-                max_tip_diameter=max_tip_diameter,
-                speed_of_sound=speed_of_sound,
-                mach_limit=mach_limit,
-                section_count=section_count,
+                max_tip_diameter=float(config["max_tip_diameter_m"]),
+                speed_of_sound=float(config["speed_of_sound_m_s"]),
+                mach_limit=float(config["max_mach_number"]),
+                section_count=int(config["number_of_sections"]),
             )
             for omega_s in specific_speeds
         ]
 
         feasible = [r for r in results if r["status"] == "PASS"]
         if not feasible:
-            raise ValueError("Nessuna configurazione geometrica rispetta i vincoli di mozzo e Mach.")
+            raise ValueError("No geometric configuration satisfied the design constraints.")
 
-        # Selezione della macchina ottimale (minimo scostamento dai coefficienti di Eckert)
         selected_design = min(
             feasible,
-            key=lambda candidate: math.hypot(
-                candidate["psi_deviation_pct"], candidate["phi_deviation_pct"]
-            ),
+            key=lambda c: math.hypot(c["psi_deviation_pct"], c["phi_deviation_pct"]),
         )
 
-        # C. Triangoli di velocita (geometry.py)
+        # 3. Triangoli di velocita
         triangles = calculate_velocity_triangles(
             selected_design,
             specific_work=specific_work,
-            work_done_factor=work_done_factor,
-            speed_of_sound=speed_of_sound,
+            work_done_factor=float(config["work_done_factor"]),
+            speed_of_sound=float(config["speed_of_sound_m_s"]),
         )
 
-        # D. Coefficienti di perdita Y_P e Y_sg (losses.py)
-        y_results = compute_all_Y_loss_coefficients(triangles, mock_aero, selected_design)
+        # 4. Verifica e geometria del profilo alare (Lieblein)
+        dati_airfoil = prepara_input_airfoil(triangles, config_airfoil)
+        verified = esegui_airfoil(dati_airfoil)
+        if not verified:
+            raise ValueError("The selected airfoil profile failed the aerodynamic checks.")
 
-        # E. Rendimento del rotore eta_rot (efficiency.py)
-        eff_results = calculate_rotor_efficiency(y_results, triangles, chord_val, config)
+        profile_name, tmax_c, _ = scelta_profilo(dati_airfoil)
+
+        h_blade, chord_val, sprog, Z_blades, delta_phi, seff, sigma_eff = dimensionamento_geometrico(
+            dati_airfoil["rtip"],
+            dati_airfoil["rhub"],
+            dati_airfoil["rm"],
+            dati_airfoil["AR"],
+            dati_airfoil["sigma_prog"],
+        )
+
+        aero_res = {
+            "profile": profile_name,
+            "sigma_eff": float(sigma_eff),
+            "chord": float(chord_val),
+            "Z": int(Z_blades),
+        }
+
+        # 5. Coefficienti di perdita Y_P e Y_sg
+        y_results = compute_all_Y_loss_coefficients(triangles, aero_res, selected_design)
+
+        # 6. Bilancio energetico e rendimento rotore
+        eff_results = calculate_rotor_efficiency(
+            y_results, triangles, aero_res["chord"], config
+        )
 
         eta_calc = eff_results["eta_rot"]
         delta_eta = abs(eta_calc - eta_assumed)
 
         print(f"{k:<6} | {eta_assumed:<12.5f} | {eta_calc:<15.5f} | {delta_eta:<12.5e}")
 
-        # F. Controllo tolleranza di convergenza
         if delta_eta < tolerance:
             converged = True
-            print("-" * 65)
-            print(f"✅ CONVERGENZA RAGGIUNTA all'iterazione {k}!\n")
+            print("-" * 70)
+            print(f"✅ CONVERGENCE ACHIEVED at iteration {k}!\n")
             break
 
-        # Aggiornamento mediante rilassamento lineare
         eta_assumed = alpha * eta_calc + (1.0 - alpha) * eta_assumed
 
     if not converged:
-        print("\n⚠️ Raggiunto il limite massimo di iterazioni senza convergenza stazionaria.\n")
+        print("\n⚠️ Maximum iterations reached without full convergence.\n")
 
-    # G. Prestazioni complessive e spinta ISO 13350 (overall_performance.py)
-    overall_res = calculate_overall_performance(selected_design, triangles, eff_results, config)
+    # 7. Prestazioni complessive e gerarchia potenze (ISO 13350)
+    overall_res = calculate_overall_performance(
+        selected_design, triangles, eff_results, config
+    )
 
-    # Report finale a schermo
-    print("=" * 65)
-    print("                    REPORT FINALE DI PROGETTO")
-    print("=" * 65)
-    print(f"• Diametro Apicale (D_tip)      : {selected_design['D_tip_m']:.4f} m")
-    print(f"• Diametro Mozzo (D_hub)        : {selected_design['D_hub_m']:.4f} m")
-    print(f"• Rapporto di Mozzo (chi)       : {selected_design['chi']:.4f}")
-    print(f"• Velocita Assiale (c_m)        : {selected_design['c_m_m_s']:.2f} m/s")
-    print(f"• Velocita Periferica (U_tip)   : {selected_design['U_tip_m_s']:.2f} m/s")
-    print(f"• Regime di Rotazione (RPM)     : {selected_design['rpm']:.1f} rpm")
-    print(f"• Mach Relativo Massimo         : {selected_design['mach_max']:.3f}")
-    print("-" * 65)
-    print(f"• Rendimento Rotore (eta_rot)   : {eff_results['eta_rot'] * 100:.2f} %")
-    print(f"• Rendimento Globale Fluido     : {overall_res['eta_global'] * 100:.2f} %")
-    print(f"• Rendimento Elettromeccanico   : {overall_res['eta_overall'] * 100:.2f} %")
-    print("-" * 65)
-    print(f"• Spinta Richiesta (ISO 13350)  : {config['nominal_thrust_N']:.2f} N")
-    print(f"• Spinta Calcolata dal Getto    : {overall_res['thrust_N']:.2f} N")
-    print(f"• Margine di Spinta             : {overall_res['thrust_margin_percent']:+.2f} %")
-    print(
-        f"• Esito Verifica Spinta         : {'✅ SODDISFATTO' if overall_res['thrust_verified'] else '❌ NON SODDISFATTO'}")
-    print("-" * 65)
-    print(f"• Potenza Cinetica Utile        : {overall_res['P_useful_kW']:.2f} kW")
-    print(f"• Potenza Aerodinamica Rotore   : {overall_res['P_rot_kW']:.2f} kW")
-    print(f"• Potenza Meccanica all'Asse    : {overall_res['P_shaft_kW']:.2f} kW")
-    print(f"• Potenza Elettrica Assorbita   : {overall_res['P_elec_kW']:.2f} kW")
-    print("=" * 65)
+    # =========================================================================
+    # ENGLISH FINAL PERFORMANCE REPORT
+    # =========================================================================
+    print("=" * 70)
+    print("                FINAL PROJECT PERFORMANCE REPORT")
+    print("=" * 70)
+    print(f"• Airfoil Profile Selected     : {aero_res['profile']}")
+    print(f"• Number of Blades (Z)         : {aero_res['Z']}")
+    print(f"• Rotational Speed             : {selected_design['rpm']:.1f} RPM")
+    print("-" * 70)
+    print(f"• Rotor Efficiency (eta_rot)   : {eff_results['eta_rot'] * 100:.2f} %")
+    print(f"• Global Fluid Efficiency      : {overall_res['eta_global'] * 100:.2f} %")
+    print(f"• Mechanical Efficiency (eta_m): {overall_res['eta_mech'] * 100:.2f} %")
+    print(f"• Motor Efficiency (eta_mot)   : {overall_res['eta_motor'] * 100:.2f} %")
+    print("-" * 70)
+    print(f"• Useful Jet Power             : {overall_res['P_useful_kW']:.2f} kW")
+    print(f"• Rotor Aerodynamic Power      : {overall_res['P_rot_kW']:.2f} kW")
+    print(f"• Shaft Power                  : {overall_res['P_shaft_kW']:.2f} kW")
+    print(f"• Electrical Power Input       : {overall_res['P_elec_kW']:.2f} kW")
+    print("-" * 70)
+    print(f"• Overall Machine Efficiency   : {overall_res['eta_overall'] * 100:.2f} %")
+    print("=" * 70)
 
     return {
         "design": selected_design,
         "triangles": triangles,
+        "airfoil": aero_res,
         "losses": y_results,
         "efficiency": eff_results,
         "overall": overall_res,

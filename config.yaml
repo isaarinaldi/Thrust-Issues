@@ -31,3 +31,9 @@ specific_speed_points: 51
 # Preliminary Mach screening
 max_mach_number: 0.3
 number_of_sections: 21
+
+# =============================================================================
+# RENDIMENTI ELETTROMECCANICI (Ipotesi di Progetto)
+# =============================================================================
+mechanical_efficiency: 0.95    # Rendimento meccanico per attriti sui cuscinetti (95%)
+motor_efficiency: 0.90         # Rendimento elettrico/magnetico del motore (90%)
