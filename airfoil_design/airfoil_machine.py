@@ -1,5 +1,5 @@
 # DEFINIZIONE FUNZIONI
-from math import cos, radians, pi, ceil
+from math import sin, radians, pi, ceil
 def scelta_profilo(dati):
     profilo = dati["profilo"]
     tmax_c = dati["tmax_c"]
@@ -11,7 +11,7 @@ def calcola_diffusion_factor(dati):
     beta1 = radians(dati["beta1"])
     beta2 = radians(dati["beta2"])
     sigma = dati["sigma_prog"]
-    delta_Wu = abs(W2*cos(beta2)-W1*cos(beta1))
+    delta_Wu = abs(W2*sin(beta2)-W1*sin(beta1))
     D = 1 - W2/W1 + delta_Wu/(2*sigma*W1)
     return D
 
