@@ -173,6 +173,11 @@ def run_main_performance(config_path: str = "config.yaml") -> dict[str, Any]:
     print(f"• Number of Blades (Z)         : {aero_res['Z']}")
     print(f"• Rotational Speed             : {selected_design['rpm']:.1f} RPM")
     print("-" * 70)
+    print(f"• Target Nominal Thrust        : {config['nominal_thrust_N']:.2f} N")
+    print(f"• Calculated Thrust (ISO 13350): {overall_res['thrust_N']:.2f} N")
+    print(f"• Thrust Margin                : {overall_res['thrust_margin_percent']:+.2f} %")
+    print(f"• Thrust Requirement Status    : {'PASSED ✅' if overall_res['thrust_verified'] else 'FAILED ❌'}")
+    print("-" * 70)
     print(f"• Rotor Efficiency (eta_rot)   : {eff_results['eta_rot'] * 100:.2f} %")
     print(f"• Global Fluid Efficiency      : {overall_res['eta_global'] * 100:.2f} %")
     print(f"• Mechanical Efficiency (eta_m): {overall_res['eta_mech'] * 100:.2f} %")
@@ -185,7 +190,6 @@ def run_main_performance(config_path: str = "config.yaml") -> dict[str, Any]:
     print("-" * 70)
     print(f"• Overall Machine Efficiency   : {overall_res['eta_overall'] * 100:.2f} %")
     print("=" * 70)
-
     return {
         "design": selected_design,
         "triangles": triangles,
