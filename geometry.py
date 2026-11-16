@@ -1,277 +1,166 @@
-
-"""
-JET FAN - GEOMETRY AND VELOCITY TRIANGLES
-Thrust Issues
-"""
-
 import math
-from typing import TYPE_CHECKING
-
-from losses import calculate_outlet_swirl
-
-if TYPE_CHECKING:
-    from machine import DesignResult
-
 
 # ==========================================
-# ANNULUS GEOMETRY
+# GEOMETRIA DEL CANALE ANULARE
 # ==========================================
 
 def annulus_geometry(tip_diameter, chi):
-    """
-    Calculate hub diameter, radii and annulus area.
+    """Calcola diametro del mozzo, raggi e area anulare."""
 
-    chi = D_hub / D_tip
-    """
+    if not math.isfinite(tip_diameter) or tip_diameter <= 0:
+        raise ValueError("Il diametro esterno deve essere positivo e finito.")
 
-    tip_radius = tip_diameter / 2
+    if not 0 < chi < 1:
+        raise ValueError("Chi deve essere compreso tra 0 e 1.")
 
+    # Diametro del mozzo [m]
     hub_diameter = chi * tip_diameter
 
+    # Raggi delle sezioni di riferimento [m]
+    tip_radius = tip_diameter / 2
     hub_radius = hub_diameter / 2
 
+    # Sezione media scelta a metà dell'altezza della pala [m]
+    mean_radius = (hub_radius + tip_radius) / 2
+
+    # Altezza della pala [m]
+    blade_height = tip_radius - hub_radius
+
+    # Area anulare, senza considerare il bloccaggio delle pale [m²]
     annulus_area = (
         math.pi / 4
         * (tip_diameter**2 - hub_diameter**2)
     )
 
-    return (
-        hub_diameter,
-        hub_radius,
-        tip_radius,
-        annulus_area
-    )
+    return {
+        "tip_diameter": tip_diameter,
+        "hub_diameter": hub_diameter,
+        "tip_radius": tip_radius,
+        "hub_radius": hub_radius,
+        "mean_radius": mean_radius,
+        "blade_height": blade_height,
+        "annulus_area": annulus_area,
+    }
 
+#==============================================================#
+# CONTINUITà CON LA PORTATA #
+#==============================================================#
 
-# ==========================================
-# MAXIMUM VELOCITIES ALONG THE BLADE
-# ==========================================
+def hub_ratio_from_continuity(flow_rate, tip_diameter, phi, tip_speed):
+    """Ricava chi imponendo Q = area anulare * phi * Utip."""
 
-def maximum_section_speeds(
-    *,
-    axial_velocity,
-    angular_velocity,
-    hub_radius,
-    tip_radius,
-    outlet_swirl_tip,
-    section_count
-):
-    """
-    Evaluate relative and absolute velocities
-    along radial sections of the rotor.
+    values = (flow_rate, tip_diameter, phi, tip_speed)
 
-    Assumptions:
-        Constant axial velocity
-        No inlet prerotation
-        Free vortex at rotor outlet
-    """
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError("Gli input devono essere finiti e positivi.")
 
-    max_relative_speed = 0.0
-    max_absolute_speed = 0.0
+    # Area circolare totale [m²]
+    total_area = math.pi * tip_diameter**2 / 4
 
-    for index in range(section_count):
+    # Velocità meridiana [m/s]
+    c_m = phi * tip_speed
 
-        radius = (
-            hub_radius
-            + (tip_radius - hub_radius)
-            * index / (section_count - 1)
+    # Area anulare richiesta dalla continuità [m²]
+    annulus_area_required = flow_rate / c_m
+
+    if annulus_area_required >= total_area:
+        raise ValueError(
+            "Configurazione non ammissibile: la continuità richiede "
+            "un mozzo nullo o un'area anulare maggiore dell'area totale."
         )
 
-        blade_speed = angular_velocity * radius
+    chi = math.sqrt(1 - annulus_area_required / total_area)
 
-        # Free vortex distribution
-        outlet_swirl = (
-            outlet_swirl_tip * tip_radius / radius
-        )
+    return chi
 
-        # Inlet relative velocity
-        inlet_relative_speed = math.hypot(
-            axial_velocity,
-            blade_speed
-        )
-
-        # Outlet relative velocity
-        outlet_relative_speed = math.hypot(
-            axial_velocity,
-            blade_speed - outlet_swirl
-        )
-
-        # Outlet absolute velocity
-        outlet_absolute_speed = math.hypot(
-            axial_velocity,
-            outlet_swirl
-        )
-
-        max_relative_speed = max(
-            max_relative_speed,
-            inlet_relative_speed,
-            outlet_relative_speed
-        )
-
-        max_absolute_speed = max(
-            max_absolute_speed,
-            axial_velocity,
-            outlet_absolute_speed
-        )
-
-    return (
-        max_relative_speed,
-        max_absolute_speed
-    )
-
-
-# ==========================================
-# VELOCITY TRIANGLES
-# ==========================================
+#===========================================================#
+#CALCOLO DEI TRIANGOLI DELLA VELOCITA'#
+#===========================================================#
 
 def calculate_velocity_triangles(
-    design: "DesignResult",
-    *,
-    specific_work,
+    geometry,
+    tip_speed,
+    c_m,
+    specific_head,
+    rotor_efficiency_initial,
     work_done_factor,
-    speed_of_sound
 ):
-    """
-    Calculate velocity triangles at:
-        Hub
-        Mean
-        Tip
-    """
+    """Calcola i triangoli a hub, medio e tip con legge free vortex."""
 
-    angular_velocity = design["omega_rad_s"]
-
-    tip_radius = design["D_tip_m"] / 2
-
-    hub_radius = design["D_hub_m"] / 2
-
-    axial_velocity = design["c_m_m_s"]
-
-    tip_speed = design["U_tip_m_s"]
-
-    # Outlet swirl velocity at the tip
-    outlet_swirl_tip = calculate_outlet_swirl(
-        specific_work,
+    values = (
         tip_speed,
-        work_done_factor
+        c_m,
+        specific_head,
+        rotor_efficiency_initial,
+        work_done_factor,
     )
 
-    # Reference radial sections
-    radii = {
-        "Hub": hub_radius,
-        "Mean": (hub_radius + tip_radius) / 2,
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError(
+            "Gli input dei triangoli devono essere finiti e positivi."
+        )
+
+    if rotor_efficiency_initial > 1:
+        raise ValueError("Il rendimento non può essere maggiore di 1.")
+
+    tip_radius = geometry["tip_radius"]
+
+    # Incremento della componente tangenziale al tip [m/s]
+    delta_c_u_tip = specific_head / (
+        work_done_factor * rotor_efficiency_initial * tip_speed
+    )
+
+    sections = {
+        "Hub": geometry["hub_radius"],
+        "Mean": geometry["mean_radius"],
         "Tip": tip_radius,
     }
 
     triangles = {}
 
-    for name, radius in radii.items():
+    for section, radius in sections.items():
+        # Velocità periferica locale [m/s]
+        U = tip_speed * radius / tip_radius
 
-        # Peripheral velocity
-        blade_speed = angular_velocity * radius
+        # Legge free vortex: r * delta_c_u = costante [m/s]
+        delta_c_u = delta_c_u_tip * tip_radius / radius
 
-        # Free vortex distribution
-        outlet_swirl = (
-            outlet_swirl_tip * tip_radius / radius
-        )
+        # Velocità assolute [m/s]
+        c1 = c_m
+        c3 = c_m
+        c2 = math.hypot(c_m, delta_c_u)
 
-        # Relative velocities
-        inlet_relative_speed = math.hypot(
-            axial_velocity,
-            blade_speed
-        )
+        # Velocità relative [m/s]
+        w1 = math.hypot(c_m, U)
+        w2 = math.hypot(c_m, U - delta_c_u)
 
-        outlet_relative_speed = math.hypot(
-            axial_velocity,
-            blade_speed - outlet_swirl
-        )
+        # Angoli rispetto alla direzione tangenziale [gradi]
+        alpha1 = 90.0
+        alpha3 = 90.0
+        alpha2 = math.degrees(math.asin(c_m / c2))
 
-        # Absolute outlet velocity
-        outlet_absolute_speed = math.hypot(
-            axial_velocity,
-            outlet_swirl
-        )
+        beta1 = math.degrees(math.asin(c_m / w1))
+        beta2 = math.degrees(math.asin(c_m / w2))
 
-        # Euler work consistency check
-        work_check = (
-            work_done_factor
-            * blade_speed
-            * outlet_swirl
-        )
+        if U - delta_c_u < 0:
+            beta2 = 180.0 - beta2
 
-        if not math.isclose(
-            specific_work,
-            work_check,
-            rel_tol=1e-9
-        ):
-            raise ValueError(
-                f"Euler work check failed at {name} section."
-            )
-
-        triangles[name] = {
-
+        triangles[section] = {
             "radius": radius,
-
-            "U": blade_speed,
-
-            "c_m": axial_velocity,
-
-            "c_theta2": outlet_swirl,
-
-            "c1": axial_velocity,
-
-            "c2": outlet_absolute_speed,
-
-            "c_inf": math.hypot(
-                axial_velocity,
-                outlet_swirl / 2
-            ),
-
-            "w1": inlet_relative_speed,
-
-            "w2": outlet_relative_speed,
-
-            "w_inf": math.hypot(
-                axial_velocity,
-                blade_speed - outlet_swirl / 2
-            ),
-
-            "alpha1": 90.0,
-
-            "alpha2": math.degrees(
-                math.atan2(
-                    axial_velocity,
-                    outlet_swirl
-                )
-            ),
-
-            "beta1": math.degrees(
-                math.atan2(
-                    axial_velocity,
-                    blade_speed
-                )
-            ),
-
-            "beta2": math.degrees(
-                math.atan2(
-                    axial_velocity,
-                    blade_speed - outlet_swirl
-                )
-            ),
-
-            "beta_inf": math.degrees(
-                math.atan2(
-                    axial_velocity,
-                    blade_speed - outlet_swirl / 2
-                )
-            ),
-
-            "Ma1": (
-                inlet_relative_speed / speed_of_sound
-            ),
-
-            "Ma2": (
-                outlet_relative_speed / speed_of_sound
-            ),
+            "U": U,
+            "c_m": c_m,
+            "c_theta2": delta_c_u,
+            "c1": c1,
+            "c2": c2,
+            "c3": c3,
+            "w1": w1,
+            "w2": w2,
+            "alpha1": alpha1,
+            "alpha2": alpha2,
+            "alpha3": alpha3,
+            "beta1": beta1,
+            "beta2": beta2,
         }
 
     return triangles
+
