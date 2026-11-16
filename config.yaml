@@ -1,33 +1,36 @@
-# ==========================================
-# 1. PRELIMINARY DESIGN
-# ==========================================
+#INPUT E ASSUNZIONI
+#===================================================================#
 
 # Design requirements
-nominal_thrust_N: 1000.0
-max_tip_diameter_m: 1.200
+nominal_thrust: 1000.0 #N
+max_tip_diameter: 1.200 #m
 
 # Air properties
-air_density_kg_m3: 1.2
-dynamic_viscosity_Pa_s: 1.81e-5
-air_temperature_K: 293.15
-speed_of_sound_m_s: 343.0
+air_density: 1.2 #kg/m3
+dynamic_viscosity: 1.81e-5 #Pa/s
+air_temperature: 293.15 #K
+speed_of_sound: 343.0 #m/s
 
 # Operating conditions
-jet_velocity_m_s: 30.0
-ambient_velocity_m_s: 0.0
+jet_velocity: 30.0 #m/s
+ambient_velocity: 0.0 #m/s
 
 # Initial efficiency assumptions
 rotor_efficiency_initial: 0.80
 work_done_factor: 1.0
 
 # Geometric constraint
-tip_diameter_fraction: 0.995
+tip_diameter_fraction: 0.995 #Chiedere a Francesco conferma (potenziale problema)
 
 # Specific speed search
-specific_speed_min: 2.5
-specific_speed_max: 5.0
-specific_speed_points: 51
+specific_speed_min: 3.0
+specific_speed_max: 7.0
+specific_speed_points: 81  # Passo di ricerca: 0.05
 
-# Preliminary Mach screening
+# Parametri riservati a controlli successivi:
+# il controllo Mach non è ancora implementato
 max_mach_number: 0.3
-number_of_sections: 21
+
+# Non ancora utilizzato: attualmente si calcolano Hub, Mean e Tip
+number_of_sections: 21 #Chiedere a Tommaso?? Non mi ricordo a cosa serviva
+

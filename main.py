@@ -1,524 +1,209 @@
-
-"""
-JET FAN - PRELIMINARY DESIGN
-Thrust Issues
-
-Main program
-"""
-
-import csv
-import math
-from collections.abc import Mapping
 from pathlib import Path
 
-import numpy as np
 import yaml
 
-from geometry import calculate_velocity_triangles
-from machine import preliminary_design, _require_positive_finite
-from thermo import operating_point
+from machine import (
+    operating_point,
+    eckert_search,
+    select_design,
+    check_continuity,
+)
+
+from geometry import (
+    annulus_geometry,
+    hub_ratio_from_continuity,
+    calculate_velocity_triangles,
+)
 
 
-# ==========================================
-# CONFIGURATION FUNCTIONS
-# ==========================================
+def main():
 
-def _read_number(config: Mapping[str, object], key: str) -> float:
+    # ==========================================
+    # 1. LETTURA INPUT
+    # ==========================================
 
-    if key not in config:
-        raise ValueError(
-            f"Missing required configuration value: {key}"
-        )
-
-    value = config[key]
-
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-    ):
-        raise ValueError(
-            f"Configuration value {key!r} must be a number."
-        )
-
-    try:
-        number = float(value)
-    except OverflowError:
-        raise ValueError(
-            f"Configuration value {key!r} must be finite."
-        ) from None
-
-    if not math.isfinite(number):
-        raise ValueError(
-            f"Configuration value {key!r} must be finite."
-        )
-
-    return number
-
-
-def _read_integer(config: Mapping[str, object], key: str) -> int:
-
-    value = _read_number(config, key)
-
-    if not value.is_integer():
-        raise ValueError(
-            f"Configuration value {key!r} must be an integer."
-        )
-
-    return int(value)
-
-
-# ==========================================
-# MAIN PROGRAM
-# ==========================================
-
-def main(
-    config_path: Path | None = None,
-    output_path: Path | None = None
-) -> dict[str, dict[str, float]] | None:
-
-    project_dir = Path(__file__).resolve().parent
-
-    if config_path is None:
-        config_path = project_dir / "config.yaml"
-
-    # --------------------------------------
-    # 1. READ CONFIGURATION
-    # --------------------------------------
+    config_path = Path(__file__).resolve().parent / "config.yaml"
 
     with config_path.open("r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
 
-    if not isinstance(config, Mapping):
-        raise ValueError(
-            f"Configuration file {config_path} "
-            "must contain a YAML mapping."
-        )
+    # ==========================================
+    # 2. PUNTO DI FUNZIONAMENTO
+    # ==========================================
 
-    nominal_thrust = _read_number(
-        config, "nominal_thrust_N"
+    flow_rate, specific_head, specific_work, rotor_power = operating_point(
+        nominal_thrust=config["nominal_thrust"],
+        air_density=config["air_density"],
+        jet_velocity=config["jet_velocity"],
+        ambient_velocity=config["ambient_velocity"],
+        rotor_efficiency_initial=config["rotor_efficiency_initial"],
     )
 
-    air_density = _read_number(
-        config, "air_density_kg_m3"
+    print("\nDATI DI FUNZIONAMENTO")
+    print(f"Portata Q = {flow_rate:.2f} m³/s")
+    print(f"Energia specifica gH = {specific_head:.2f} J/kg")
+    print(f"Lavoro specifico L = {specific_work:.2f} J/kg")
+    print(f"Potenza P = {rotor_power / 1000:.2f} kW")
+
+    # ==========================================
+    # 3. RICERCA ECKERT
+    # ==========================================
+
+    results = eckert_search(
+        flow_rate=flow_rate,
+        specific_head=specific_head,
+        max_tip_diameter=config["max_tip_diameter"],
+        tip_diameter_fraction=config["tip_diameter_fraction"],
+        specific_speed_min=config["specific_speed_min"],
+        specific_speed_max=config["specific_speed_max"],
+        specific_speed_points=config["specific_speed_points"],
     )
 
-    jet_velocity = _read_number(
-        config, "jet_velocity_m_s"
-    )
-
-    ambient_velocity = _read_number(
-        config, "ambient_velocity_m_s"
-    )
-
-    rotor_efficiency = _read_number(
-        config, "rotor_efficiency_initial"
-    )
-
-    work_done_factor = _read_number(
-        config, "work_done_factor"
-    )
-
-    max_tip_diameter = _read_number(
-        config, "max_tip_diameter_m"
-    )
-
-    diameter_fraction = _read_number(
-        config, "tip_diameter_fraction"
-    )
-
-    speed_min = _read_number(
-        config, "specific_speed_min"
-    )
-
-    speed_max = _read_number(
-        config, "specific_speed_max"
-    )
-
-    speed_points = _read_integer(
-        config, "specific_speed_points"
-    )
-
-    speed_of_sound = _read_number(
-        config, "speed_of_sound_m_s"
-    )
-
-    mach_limit = _read_number(
-        config, "max_mach_number"
-    )
-
-    section_count = _read_integer(
-        config, "number_of_sections"
-    )
-
-    # --------------------------------------
-    # 2. INPUT VALIDATION
-    # --------------------------------------
-
-    if nominal_thrust <= 0 or air_density <= 0:
-        raise ValueError(
-            "Nominal thrust and air density must be positive."
-        )
-
-    if ambient_velocity < 0 or jet_velocity <= ambient_velocity:
-        raise ValueError(
-            "Velocities must satisfy "
-            "0 <= ambient_velocity < jet_velocity."
-        )
-
-    if not 0 < rotor_efficiency <= 1:
-        raise ValueError(
-            "Rotor efficiency must be between 0 and 1."
-        )
-
-    if work_done_factor <= 0:
-        raise ValueError(
-            "Work-done factor must be positive."
-        )
-
-    if max_tip_diameter <= 0 or not 0 < diameter_fraction < 1:
-        raise ValueError(
-            "Invalid tip diameter or diameter fraction."
-        )
-
-    if not 2.5 <= speed_min < speed_max <= 5.0:
-        raise ValueError(
-            "Specific speed range must be within 2.5 and 5.0."
-        )
-
-    if speed_points < 2 or section_count < 3:
-        raise ValueError(
-            "Invalid number of search points or radial sections."
-        )
-
-    if speed_of_sound <= 0 or not 0 < mach_limit < 1:
-        raise ValueError(
-            "Invalid speed of sound or Mach limit."
-        )
-
-    # --------------------------------------
-    # 3. OPERATING POINT
-    # --------------------------------------
-
-    try:
-        (
-            flow_rate,
-            specific_head,
-            specific_work,
-            rotor_power
-        ) = operating_point(
-            nominal_thrust,
-            air_density,
-            jet_velocity,
-            ambient_velocity,
-            rotor_efficiency
-        )
-
-    except (OverflowError, ZeroDivisionError) as error:
-        raise ValueError(
-            "Configuration values exceed the supported numeric range."
-        ) from error
-
-    for name, value in (
-        ("volumetric flow rate", flow_rate),
-        ("specific head", specific_head),
-        ("specific work", specific_work),
-        ("rotor power", rotor_power),
-    ):
-        _require_positive_finite(name, value)
-
-    # --------------------------------------
-    # 4. FIXED TIP DIAMETER
-    # --------------------------------------
-
-    tip_diameter = (
-        diameter_fraction * max_tip_diameter
-    )
-
-    _require_positive_finite(
-        "tip diameter", tip_diameter
-    )
-
-    # --------------------------------------
-    # 5. SPECIFIC SPEED SEARCH
-    # --------------------------------------
-
-    specific_speeds = np.linspace(
-        speed_min,
-        speed_max,
-        speed_points
-    )
-
-    try:
-        results = [
-            preliminary_design(
-                float(omega_s),
-                flow_rate=flow_rate,
-                specific_head=specific_head,
-                specific_work=specific_work,
-                work_done_factor=work_done_factor,
-                tip_diameter=tip_diameter,
-                max_tip_diameter=max_tip_diameter,
-                speed_of_sound=speed_of_sound,
-                mach_limit=mach_limit,
-                section_count=section_count,
-            )
-            for omega_s in specific_speeds
-        ]
-
-    except (OverflowError, ZeroDivisionError) as error:
-        raise ValueError(
-            "Configuration values produce results "
-            "outside the supported numeric range."
-        ) from error
-
-    # --------------------------------------
-    # 6. PRINT OPERATING CONDITIONS
-    # --------------------------------------
-
-    print("\nJET FAN - PRELIMINARY DESIGN")
-
-    print(f"Nominal thrust: {nominal_thrust:.1f} N")
-
-    print(
-        "Pressure thrust: neglected "
-        "(equal inlet/outlet static pressure assumed)"
-    )
-
-    print(f"Volume flow rate: {flow_rate:.2f} m³/s")
-
-    print(f"Specific head: {specific_head:.2f} J/kg")
-
-    print(f"Specific work: {specific_work:.2f} J/kg")
-
-    print(
-        f"Preliminary power: {rotor_power / 1000:.2f} kW"
-    )
-
-    print("\nFIXED GEOMETRY")
-
-    print(f"Tip diameter: {tip_diameter:.4f} m")
-
-    tip_clearance = (
-        max_tip_diameter - tip_diameter
-    ) * 500
-
-    print(
-        f"Radial tip clearance: {tip_clearance:.2f} mm"
-    )
-
-    # --------------------------------------
-    # 7. PRINT SEARCH RESULTS
-    # --------------------------------------
-
-    print("\nSPECIFIC SPEED SEARCH")
-
+    print("\nRICERCA ECKERT")
     print(
         f"{'Omega_s':>8} "
-        f"{'RPM':>8} "
-        f"{'psi':>8} "
-        f"{'phi':>8} "
-        f"{'Mach':>8} "
-        f"{'Status':>8}"
+        f"{'Phi':>7} "
+        f"{'Psi':>7} "
+        f"{'Chi':>8} "
+        f"{'Dtip [m]':>10} "
+        f"{'Diametro OK':>12}"
     )
 
     for result in results:
+        check = "SI" if result["diameter_ok"] else "NO"
 
         print(
-            f"{result['omega_s']:8.2f} "
-            f"{result['rpm']:8.1f} "
-            f"{result['psi']:8.3f} "
-            f"{result['phi']:8.3f} "
-            f"{result['mach_max']:8.3f} "
-            f"{result['status']:>8}"
+            f"{result['specific_speed']:8.2f} "
+            f"{result['phi']:7.3f} "
+            f"{result['psi']:7.3f} "
+            f"{result['chi']:8.3f} "
+            f"{result['tip_diameter']:10.4f} "
+            f"{check:>12}"
         )
 
-    # --------------------------------------
-    # 8. SAVE RESULTS TO CSV
-    # --------------------------------------
+    # ==========================================
+    # 4. SELEZIONE DELLA CONFIGURAZIONE
+    # ==========================================
 
-    if output_path is None:
-        output_path = (
-            project_dir / "preliminary_results.csv"
-        )
-
-    with output_path.open(
-        "w",
-        newline="",
-        encoding="utf-8"
-    ) as file:
-
-        writer = csv.DictWriter(
-            file,
-            fieldnames=list(results[0])
-        )
-
-        writer.writeheader()
-
-        writer.writerows(
-            dict(result) for result in results
-        )
-
-    print(f"\nResults saved to: {output_path}")
-
-    # --------------------------------------
-    # 9. SELECT FEASIBLE CONFIGURATIONS
-    # --------------------------------------
-
-    feasible = [
-        result
-        for result in results
-        if result["status"] == "PASS"
-    ]
-
-    print(
-        f"Configurations evaluated: {len(results)}"
-    )
-
-    print(
-        "Passing geometry and Mach checks: "
-        f"{len(feasible)}"
-    )
-
-    if not feasible:
-        print("\nNo configuration passes the checks.")
+    if not any(result["diameter_ok"] for result in results):
+        print("\nNessuna configurazione rispetta il limite sul diametro.")
         return
 
-    # --------------------------------------
-    # 10. SELECT THE BEST CONFIGURATION
-    # --------------------------------------
+    selected_design = select_design(results)
 
-    selected_design = min(
-        feasible,
-        key=lambda candidate: math.hypot(
-            candidate["psi_deviation_pct"],
-            candidate["phi_deviation_pct"]
-        ),
-    )
-
+    print("\nCONFIGURAZIONE SELEZIONATA")
+    print(f"Velocità specifica = {selected_design['specific_speed']:.2f}")
+    print(f"Phi = {selected_design['phi']:.4f}")
+    print(f"Psi = {selected_design['psi']:.4f}")
+    print(f"Chi = {selected_design['chi']:.4f}")
     print(
-        f"Specific speed: "
-        f"{selected_design['omega_s']:.2f}"
+        f"Velocità angolare = "
+        f"{selected_design['angular_velocity']:.2f} rad/s"
     )
-
     print(
-        f"Rotational speed: "
-        f"{selected_design['rpm']:.1f} rpm"
+        f"Velocità di rotazione = "
+        f"{selected_design['rotational_speed']:.1f} giri/min"
     )
-
+    print(f"Utip = {selected_design['tip_speed']:.2f} m/s")
     print(
-        f"Head coefficient (psi): "
-        f"{selected_design['psi']:.4f}"
+        f"Diametro limite = "
+        f"{selected_design['tip_diameter_limit']:.4f} m"
     )
 
-    print(
-        f"Flow coefficient (phi): "
-        f"{selected_design['phi']:.4f}"
+    # ==========================================
+    # 5. GEOMETRIA
+    # ==========================================
+
+    # Conserviamo il riferimento letto dal diagramma
+    chi_eckert = selected_design["chi"]
+
+    # Correzione del rapporto hub-to-tip dalla continuità
+    selected_design["chi"] = hub_ratio_from_continuity(
+        flow_rate=flow_rate,
+        tip_diameter=selected_design["tip_diameter"],
+        phi=selected_design["phi"],
+        tip_speed=selected_design["tip_speed"],
     )
 
-    print(
-        f"Hub-to-tip ratio (chi): "
-        f"{selected_design['chi']:.4f}"
+    # Geometria aggiornata con il nuovo chi
+    geometry = annulus_geometry(
+        tip_diameter=selected_design["tip_diameter"],
+        chi=selected_design["chi"],
     )
 
-    print(
-        f"Maximum Mach number: "
-        f"{selected_design['mach_max']:.3f}"
+    print("\nVERIFICA DI CONTINUITÀ")
+    print(f"Portata di progetto = {flow_rate:.3f} m³/s")
+    print(f"Chi di riferimento Eckert = {chi_eckert:.4f}")
+    print(f"Chi calcolato per conservare la portata = {selected_design['chi']:.4f}")
+
+    # ==========================================
+    # 6. DATI DEFINITIVI E VERIFICA DI CONTINUITÀ
+    # ==========================================
+
+    # Velocità meridiana adottata [m/s]
+    c_m = selected_design["phi"] * selected_design["tip_speed"]
+
+    # La portata di progetto rimane quella iniziale [m³/s]
+    flow_rate_design = flow_rate
+
+    continuity = check_continuity(
+        flow_rate=flow_rate,
+        phi=selected_design["phi"],
+        tip_speed=selected_design["tip_speed"],
+        annulus_area=geometry["annulus_area"],
+        jet_velocity=config["jet_velocity"],
     )
 
-    # --------------------------------------
-    # 11. VELOCITY TRIANGLES
-    # --------------------------------------
+    print("\nGEOMETRIA DEFINITIVA DEL ROTORE")
+    print(f"Chi = {selected_design['chi']:.4f}")
+    print(f"Dtip = {geometry['tip_diameter']:.4f} m")
+    print(f"Dhub = {geometry['hub_diameter']:.4f} m")
+    print(f"Raggio hub = {geometry['hub_radius']:.4f} m")
+    print(f"Raggio medio = {geometry['mean_radius']:.4f} m")
+    print(f"Raggio tip = {geometry['tip_radius']:.4f} m")
+    print(f"Altezza pala = {geometry['blade_height']:.4f} m")
+    print(f"Area anulare = {geometry['annulus_area']:.4f} m²")
 
+    # ==========================================
+    # 7. TRIANGOLI DI VELOCITA'
+    # ==========================================
     triangles = calculate_velocity_triangles(
-        selected_design,
-        specific_work=specific_work,
-        work_done_factor=work_done_factor,
-        speed_of_sound=speed_of_sound,
+        geometry=geometry,
+        tip_speed=selected_design["tip_speed"],
+        c_m=c_m,
+        specific_head=specific_head,
+        rotor_efficiency_initial=config["rotor_efficiency_initial"],
+        work_done_factor=config["work_done_factor"],
     )
 
-    print("\n" + "=" * 50)
-
-    print("VELOCITY TRIANGLES - SELECTED DESIGN")
-
-    print("=" * 50)
+    print("\nTRIANGOLI DELLE VELOCITÀ")
+    print(f"Cm = {c_m:.3f} m/s")
+    print(f"Q = {flow_rate_design:.3f} m³/s")
 
     print(
-        f"Specific speed: "
-        f"{selected_design['omega_s']:.2f}"
+        f"\n{'Sezione':>8} {'U':>9} {'Delta Cu':>10}"
+        f" {'c2':>9} {'w1':>9} {'w2':>9}"
+        f" {'alpha2':>9} {'beta1':>9} {'beta2':>9}"
     )
 
-    print(
-        f"Rotational speed: "
-        f"{selected_design['rpm']:.2f} rpm"
-    )
-
-    for name, data in triangles.items():
-
-        print(f"\n{name.upper()} SECTION")
-
-        print(f"Radius: {data['radius']:.4f} m")
-
+    for section, values in triangles.items():
         print(
-            f"Peripheral speed: {data['U']:.2f} m/s"
+            f"{section:>8}"
+            f" {values['U']:9.3f}"
+            f" {values['c_theta2']:10.3f}"
+            f" {values['c2']:9.3f}"
+            f" {values['w1']:9.3f}"
+            f" {values['w2']:9.3f}"
+            f" {values['alpha2']:9.2f}"
+            f" {values['beta1']:9.2f}"
+            f" {values['beta2']:9.2f}"
         )
 
-        print(
-            f"Axial velocity: {data['c_m']:.2f} m/s"
-        )
+    print("\nVelocità in m/s; angoli in gradi.")
+    print("In tutte le sezioni: c1 = c3 = Cm; alpha1 = alpha3 = 90°.")
 
-        print(
-            f"Outlet swirl: {data['c_theta2']:.2f} m/s"
-        )
+    return
 
-        print(
-            f"Absolute inlet velocity: {data['c1']:.2f} m/s"
-        )
-
-        print(
-            f"Absolute outlet velocity: {data['c2']:.2f} m/s"
-        )
-
-        print(
-            f"Relative inlet velocity: {data['w1']:.2f} m/s"
-        )
-
-        print(
-            f"Relative outlet velocity: {data['w2']:.2f} m/s"
-        )
-
-        print(
-            f"Mean relative velocity: {data['w_inf']:.2f} m/s"
-        )
-
-        print(
-            f"Alpha 1: {data['alpha1']:.2f} deg"
-        )
-
-        print(
-            f"Alpha 2: {data['alpha2']:.2f} deg"
-        )
-
-        print(
-            f"Beta 1: {data['beta1']:.2f} deg"
-        )
-
-        print(
-            f"Beta 2: {data['beta2']:.2f} deg"
-        )
-
-        print(
-            f"Beta mean: {data['beta_inf']:.2f} deg"
-        )
-
-        print(
-            f"Mach inlet: {data['Ma1']:.3f}"
-        )
-
-        print(
-            f"Mach outlet: {data['Ma2']:.3f}"
-        )
-
-    return triangles
 
 if __name__ == "__main__":
     main()

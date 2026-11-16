@@ -1,53 +1,60 @@
-
-import math
 import numpy as np
 
-# Preliminary digitization of the Eckert diagram.
-# Columns: Omega_s, Phi_opt, psi_opt.
-# Approximate values, to be refined before final design.
 
-ECKERT_DATA = np.array([
-    [2.50, 0.450, 0.260],
-    [2.75, 0.445, 0.239],
-    [3.00, 0.441, 0.216],
-    [3.25, 0.438, 0.201],
-    [3.50, 0.437, 0.185],
-    [3.75, 0.436, 0.173],
-    [4.00, 0.437, 0.161],
-    [4.25, 0.438, 0.152],
-    [4.50, 0.440, 0.142],
-    [4.75, 0.443, 0.134],
-    [5.00, 0.446, 0.127],
+# ==========================================
+# DATI DEL DIAGRAMMA DI ECKERT
+# Letture manuali approssimate della figura 5.1
+# Tutte le grandezze sono adimensionali
+# ==========================================
+
+specific_speed_data = np.array([
+    3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0
+])
+
+# Coefficiente di portata: scala sinistra
+phi_data = np.array([
+    0.450, 0.445, 0.445, 0.448, 0.455,
+    0.462, 0.470, 0.480, 0.490
+])
+
+# Coefficiente di prevalenza: scala destra
+psi_data = np.array([
+    0.230, 0.200, 0.175, 0.150, 0.130,
+    0.112, 0.100, 0.087, 0.078
+])
+
+# Rapporto diametro mozzo / diametro esterno: scala sinistra
+chi_data = np.array([
+    0.560, 0.500, 0.500, 0.500, 0.500,
+    0.500, 0.500, 0.500, 0.500
 ])
 
 
-def eckert_coefficients(omega_s):
-    """Return approximate reference coefficients."""
+# ==========================================
+# INTERPOLAZIONE DEI COEFFICIENTI
+# ==========================================
 
-    x = ECKERT_DATA[:, 0]
+def eckert_coefficients(specific_speed):
+    """Restituisce phi, psi e chi per una velocità specifica."""
 
-    if not (x[0] <= omega_s <= x[-1]):
-        raise ValueError("Specific speed outside Eckert range.")
+    if not np.isfinite(specific_speed):
+        raise ValueError("La velocità specifica deve essere finita.")
 
-    phi_opt = float(
-        np.interp(omega_s, x, ECKERT_DATA[:, 1])
-    )
-    psi_opt = float(
-        np.interp(omega_s, x, ECKERT_DATA[:, 2])
-    )
-
-    # Chi is derived from the similitude identity,
-    # not independently digitized from the chart.
-    chi_squared = (
-        1 - omega_s**2 * psi_opt**1.5
-        / (math.pi * phi_opt)
-    )
-
-    if not (0 < chi_squared < 1):
+    if not specific_speed_data[0] <= specific_speed <= specific_speed_data[-1]:
         raise ValueError(
-            "Inconsistent Eckert reference coefficients."
+            "La velocità specifica deve essere compresa tra 3 e 7."
         )
 
-    chi_opt = math.sqrt(chi_squared)
+    phi = float(np.interp(
+        specific_speed, specific_speed_data, phi_data
+    ))
 
-    return phi_opt, psi_opt, chi_opt
+    psi = float(np.interp(
+        specific_speed, specific_speed_data, psi_data
+    ))
+
+    chi = float(np.interp(
+        specific_speed, specific_speed_data, chi_data
+    ))
+
+    return phi, psi, chi

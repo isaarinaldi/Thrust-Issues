@@ -1,232 +1,225 @@
-
-"""
-JET FAN - PRELIMINARY DESIGN
-Thrust Issues
-"""
-
 import math
-from typing import TypedDict
+import numpy as np
 
 from data.eckert_data import eckert_coefficients
-from geometry import annulus_geometry, maximum_section_speeds
-from losses import calculate_outlet_swirl
-from thermo import mach_numbers
-
 
 # ==========================================
-# DESIGN RESULT STRUCTURE
+# PORTATA E LAVORO SPECIFICO #
 # ==========================================
 
-class DesignResult(TypedDict):
-    omega_s: float
-    rpm: float
-    omega_rad_s: float
-    D_tip_m: float
-    D_hub_m: float
-    tip_clearance_mm: float
-    chi: float
-    chi_opt: float
-    phi: float
-    phi_opt: float
-    psi: float
-    psi_opt: float
-    phi_deviation_pct: float
-    psi_deviation_pct: float
-    c_m_m_s: float
-    U_tip_m_s: float
-    mach_relative: float
-    mach_absolute: float
-    mach_max: float
-    status: str
+def operating_point(
+    nominal_thrust,
+    air_density,
+    jet_velocity,
+    ambient_velocity,
+    rotor_efficiency_initial,
+):
+    values = (
+        nominal_thrust,
+        air_density,
+        jet_velocity,
+        ambient_velocity,
+        rotor_efficiency_initial,
+    )
 
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("Gli input devono essere finiti.")
 
-# ==========================================
-# NUMERICAL VALIDATION
-# ==========================================
+    if nominal_thrust <= 0 or air_density <= 0:
+        raise ValueError("Spinta e densità devono essere positive.")
 
-def _require_positive_finite(name: str, value: float) -> None:
-
-    if not math.isfinite(value) or value <= 0:
+    if ambient_velocity < 0 or jet_velocity <= ambient_velocity:
         raise ValueError(
-            f"Configuration values produce an invalid {name}; "
-            "check their magnitudes."
+            "Per questo modello deve risultare "
+            "jet_velocity > ambient_velocity >= 0."
         )
 
+    if not 0 < rotor_efficiency_initial <= 1:
+        raise ValueError(
+            "Il rendimento deve essere maggiore di 0 e minore o uguale a 1."
+        )
+    """Calcola Q, gH, L e P per il dimensionamento preliminare."""
 
-# ==========================================
-# PRELIMINARY DESIGN
-# ==========================================
+    # Portata volumetrica Q [m³/s]
+    flow_rate = nominal_thrust / (air_density * (jet_velocity - ambient_velocity))
 
-def preliminary_design(
-    omega_s: float,
-    *,
-    flow_rate: float,
-    specific_head: float,
-    specific_work: float,
-    work_done_factor: float,
-    tip_diameter: float,
-    max_tip_diameter: float,
-    speed_of_sound: float,
-    mach_limit: float,
-    section_count: int,
-) -> DesignResult:
+    # Energia specifica utile gH [J/kg]
+    specific_head = (jet_velocity**2 - ambient_velocity**2) / 2
 
-    # --------------------------------------
-    # 1. ECKERT REFERENCE COEFFICIENTS
-    # --------------------------------------
+    # Lavoro specifico L [J/kg]
+    specific_work = specific_head / rotor_efficiency_initial
 
-    phi_opt, psi_opt, chi = eckert_coefficients(omega_s)
+    # Potenza del rotore P [W]
+    rotor_power = air_density * flow_rate * specific_work
 
-    # --------------------------------------
-    # 2. ROTATIONAL SPEED
-    # --------------------------------------
+    return flow_rate, specific_head, specific_work, rotor_power
 
-    angular_velocity = (
-        omega_s
-        * specific_head**0.75
-        / math.sqrt(flow_rate)
+
+#===========================================#
+#ECKERT DIAGRAM
+# ==========================================#
+
+def eckert_search(
+    flow_rate,
+    specific_head,
+    max_tip_diameter,
+    tip_diameter_fraction,
+    specific_speed_min,
+    specific_speed_max,
+    specific_speed_points,
+):
+    """Valuta tutte le configurazioni e verifica il diametro esterno."""
+
+    # Controllo degli input
+    positive_values = (
+        flow_rate,
+        specific_head,
+        max_tip_diameter,
     )
 
-    rpm = angular_velocity * 60 / (2 * math.pi)
-
-    # --------------------------------------
-    # 3. ROTOR GEOMETRY
-    # --------------------------------------
-
-    (
-        hub_diameter,
-        hub_radius,
-        tip_radius,
-        annulus_area
-    ) = annulus_geometry(
-        tip_diameter,
-        chi
-    )
-
-    # Peripheral speed at rotor tip
-    tip_speed = angular_velocity * tip_radius
-
-    # Axial velocity
-    axial_velocity = flow_rate / annulus_area
-
-    # --------------------------------------
-    # 4. DIMENSIONLESS COEFFICIENTS
-    # --------------------------------------
-
-    psi = specific_head / tip_speed**2
-
-    phi = axial_velocity / tip_speed
-
-    psi_deviation = 100 * (psi / psi_opt - 1)
-
-    phi_deviation = 100 * (phi / phi_opt - 1)
-
-    # --------------------------------------
-    # 5. OUTLET SWIRL
-    # --------------------------------------
-
-    outlet_swirl_tip = calculate_outlet_swirl(
-        specific_work,
-        tip_speed,
-        work_done_factor
-    )
-
-    # --------------------------------------
-    # 6. MAXIMUM VELOCITY SCREENING
-    # --------------------------------------
-
-    (
-        max_relative_speed,
-        max_absolute_speed
-    ) = maximum_section_speeds(
-        axial_velocity=axial_velocity,
-        angular_velocity=angular_velocity,
-        hub_radius=hub_radius,
-        tip_radius=tip_radius,
-        outlet_swirl_tip=outlet_swirl_tip,
-        section_count=section_count,
-    )
-
-    # --------------------------------------
-    # 7. MACH NUMBERS
-    # --------------------------------------
-
-    (
-        mach_relative,
-        mach_absolute,
-        mach_max
-    ) = mach_numbers(
-        max_relative_speed,
-        max_absolute_speed,
-        speed_of_sound
-    )
-
-    # --------------------------------------
-    # 8. DESIGN CONSTRAINTS
-    # --------------------------------------
-
-    geometry_ok = (
-        0 < hub_diameter
-        < tip_diameter
-        <= max_tip_diameter
-    )
-
-    mach_ok = mach_max < mach_limit
-
-    # --------------------------------------
-    # 9. NUMERICAL VALIDATION
-    # --------------------------------------
-
-    calculated_values = (
-        ("angular velocity", angular_velocity),
-        ("rotational speed", rpm),
-        ("tip speed", tip_speed),
-        ("annulus area", annulus_area),
-        ("axial velocity", axial_velocity),
-        ("flow coefficient", phi),
-        ("head coefficient", psi),
-        ("relative Mach number", mach_relative),
-        ("absolute Mach number", mach_absolute),
-    )
-
-    for name, value in calculated_values:
-        _require_positive_finite(name, value)
-
-    if (
-        not math.isfinite(phi_deviation)
-        or not math.isfinite(psi_deviation)
+    if any(
+        not math.isfinite(value) or value <= 0
+        for value in positive_values
     ):
         raise ValueError(
-            "Configuration values produce invalid coefficient deviations."
+            "Portata, energia specifica e diametro massimo "
+            "devono essere positivi e finiti."
         )
 
-    # --------------------------------------
-    # 10. RETURN DESIGN RESULTS
-    # --------------------------------------
+    if not 0 < tip_diameter_fraction <= 1:
+        raise ValueError(
+            "La frazione del diametro deve essere maggiore di 0 "
+            "e minore o uguale a 1."
+        )
+
+    if not 3 <= specific_speed_min < specific_speed_max <= 7:
+        raise ValueError(
+            "L'intervallo di ricerca deve essere compreso tra 3 e 7."
+        )
+
+    if (isinstance(specific_speed_points, bool)
+        or not isinstance(specific_speed_points, int)
+        or specific_speed_points < 2
+    ):
+        raise ValueError(
+            "Il numero di punti deve essere un intero maggiore o uguale a 2."
+        )
+
+    # Diametro limite adottato nel progetto [m]
+    tip_diameter_limit = (
+        tip_diameter_fraction * max_tip_diameter
+    )
+
+    # Velocità specifiche da esaminare [-]
+    specific_speeds = np.linspace(
+        specific_speed_min,
+        specific_speed_max,
+        specific_speed_points,
+    )
+
+    results = []
+
+    for specific_speed in specific_speeds:
+
+        # Coefficienti di riferimento dal diagramma [-]
+        phi, psi, chi = eckert_coefficients(specific_speed)
+
+        # Velocità angolare [rad/s]
+        angular_velocity = (
+            specific_speed * specific_head**0.75
+            / math.sqrt(flow_rate)
+        )
+
+        # Velocità di rotazione [giri/min]
+        rotational_speed = angular_velocity * 60 / (2 * math.pi)
+
+        # Velocità periferica alla punta [m/s]
+        tip_speed = math.sqrt(specific_head / psi)
+
+        # Diametro esterno calcolato [m]
+        tip_diameter = 2 * tip_speed / angular_velocity
+
+        # Verifica del vincolo sul diametro
+        diameter_ok = tip_diameter <= tip_diameter_limit
+
+        # Memorizzazione dei risultati della configurazione
+        results.append({
+            "specific_speed": float(specific_speed),
+            "phi": phi,
+            "psi": psi,
+            "chi": chi,
+            "angular_velocity": angular_velocity,
+            "rotational_speed": rotational_speed,
+            "tip_speed": tip_speed,
+            "tip_diameter": tip_diameter,
+            "tip_diameter_limit": tip_diameter_limit,
+            "diameter_ok": diameter_ok,
+        })
+
+    return results
+
+# ==========================================
+# SELEZIONE DELLA PRIMA CONFIGURAZIONE AMMISSIBILE
+# ==========================================
+
+def select_design(results):
+    """Seleziona la minima velocità specifica che rispetta il diametro."""
+
+    feasible = [
+        result for result in results
+        if result["diameter_ok"]
+    ]
+
+    if not feasible:
+        raise ValueError(
+            "Nessuna configurazione rispetta il limite sul diametro."
+        )
+
+    return min(
+        feasible,
+        key=lambda result: result["specific_speed"],
+    ).copy()
+
+
+# ==========================================
+# VELOCITÀ MERIDIANA E CONTINUITÀ
+# ==========================================
+
+def check_continuity(
+    flow_rate,
+    phi,
+    tip_speed,
+    annulus_area,
+    jet_velocity,
+):
+    """Confronta portata richiesta e portata ricavata da Eckert."""
+
+    # Velocità meridiana dal coefficiente di portata [m/s]
+    c_m_eckert = phi * tip_speed
+
+    # Velocità meridiana necessaria per conservare la portata [m/s]
+    c_m_continuity = flow_rate / annulus_area
+
+    # Portata ricavata dalla geometria e dal coefficiente phi [m³/s]
+    flow_rate_check = annulus_area * c_m_eckert
+
+    # Scostamento relativo della portata [-]
+    flow_rate_deviation = (
+        flow_rate_check - flow_rate
+    ) / flow_rate
+
+    continuity_ok = math.isclose(
+        flow_rate_check,
+        flow_rate,
+        rel_tol=1e-9,
+        abs_tol=1e-12,
+    )
 
     return {
-        "omega_s": float(omega_s),
-        "rpm": rpm,
-        "omega_rad_s": angular_velocity,
-        "D_tip_m": tip_diameter,
-        "D_hub_m": hub_diameter,
-        "tip_clearance_mm": (
-            max_tip_diameter - tip_diameter
-        ) * 500,
-        "chi": chi,
-        "chi_opt": chi,
-        "phi": phi,
-        "phi_opt": phi_opt,
-        "psi": psi,
-        "psi_opt": psi_opt,
-        "phi_deviation_pct": phi_deviation,
-        "psi_deviation_pct": psi_deviation,
-        "c_m_m_s": axial_velocity,
-        "U_tip_m_s": tip_speed,
-        "mach_relative": mach_relative,
-        "mach_absolute": mach_absolute,
-        "mach_max": mach_max,
-        "status": (
-            "PASS" if geometry_ok and mach_ok else "FAIL"
-        ),
+        "c_m_eckert": c_m_eckert,
+        "c_m_continuity": c_m_continuity,
+        "flow_rate_check": flow_rate_check,
+        "flow_rate_deviation": flow_rate_deviation,
+        "continuity_ok": continuity_ok,
     }
+
