@@ -32,7 +32,7 @@ specific_speed_points: 81  # Passo di ricerca: 0.05
 max_mach_number: 0.3
 
 # Non ancora utilizzato: attualmente si calcolano Hub, Mean e Tip
-number_of_sections: 21 #Chiedere a Tommaso?? Non mi ricordo a cosa serviva
+number_of_sections: 21 #Chiedere a Tommaso, Non mi ricordo a cosa serviva
 
 
 # =============================================================================
