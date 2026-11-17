@@ -25,7 +25,7 @@ def test_overall_performance():
         "Mean": {"U": 43.76, "c_theta2": 15.42},
     }
 
-    # 4. Output dal modulo perdite ed efficienza (efficiency.py)
+    # 4. Output dal modulo perdite ed efficienza (losses.py)
     mock_eff_result = {
         "L_euler_J_kg": 674.8,
         "eta_rot": 0.885,  # Rendimento del rotore ipotizzato all'88.5%
