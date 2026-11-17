@@ -19,12 +19,12 @@ def run_integrated_airfoil():
     triangles = preliminary["triangles"]
 
     root = Path(__file__).resolve().parent
+
     with (root / "config.yaml").open("r", encoding="utf-8") as handle:
         config_general = yaml.safe_load(handle)
-    with (root / "airfoil_design" / "airfoil_config.yaml").open(
-        "r", encoding="utf-8"
-    ) as handle:
-        config_airfoil = yaml.safe_load(handle)
+
+    # Parametri Airfoil Design dal YAML principale
+    config_airfoil = config_general["airfoil"]
 
     dati_airfoil = prepara_input_airfoil(
         triangles,

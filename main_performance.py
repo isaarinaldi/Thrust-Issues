@@ -64,8 +64,7 @@ def run_main_performance(config_path: str | Path = "config.yaml") -> dict[str, A
     # 1. LETTURA CONFIGURAZIONI (Generale + Airfoil in sola lettura)
     # -------------------------------------------------------------------------
     config = _load_yaml(_resolve_path(config_path))
-    config_airfoil = _load_yaml(
-        PROJECT_DIR / "airfoil_design" / "airfoil_config.yaml"
+    config_airfoil = config["airfoil"]
     )
 
     # Soglia limite del Diffusion Factor imposta dal collega (default 0.45)

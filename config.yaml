@@ -40,3 +40,34 @@ number_of_sections: 21 #Chiedere a Tommaso, Non mi ricordo a cosa serviva
 # =============================================================================
 mechanical_efficiency: 0.95    # Rendimento meccanico per attriti sui cuscinetti (95%)
 motor_efficiency: 0.90         # Rendimento elettrico/magnetico del motore (90%)
+
+# ==========================================
+# AIRFOIL DESIGN - NACA 65
+# ==========================================
+
+airfoil:
+  # Scelta del profilo
+  profilo: NACA65
+  tmax_c: 0.10
+  sigma_prog: 1.0
+
+  # Limiti aerodinamici
+  D_max: 0.45
+  de_haller_min: 0.72
+
+  # Correlazioni di Lieblein
+  Kti: 1.0
+  Ksh: 1.0
+  Kdelta_t: 1.0
+
+  # Convergenza della curvatura
+  epsilon_theta_deg: 0.001
+  max_iter_theta: 100
+
+  # Dimensionamento geometrico
+  AR: 2.2
+
+  # Ciclo esterno della solidita
+  sigma_step: 0.02
+  sigma_max: 1.14
+  max_iter_sigma: 8
