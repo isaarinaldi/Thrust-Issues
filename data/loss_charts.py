@@ -1,66 +1,63 @@
 from pathlib import Path
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import PchipInterpolator
 
-# Individua la cartella 'data/' in modo dinamico rispetto alla posizione di questo file
 _DATA_DIR = Path(__file__).resolve().parent
-_CSV_PATH = _DATA_DIR / "theta_l_sandrolini.csv"
+
+_CHART_FILES = {
+    "Hub": _DATA_DIR / "sandrolini_rotor_hub.csv",
+    "Mean": _DATA_DIR / "sandrolini_rotor_mean.csv",
+    "Tip": _DATA_DIR / "sandrolini_rotor_tip.csv",
+}
+
+_interpolators: dict[str, tuple[PchipInterpolator, float, float]] = {}
 
 
-def get_theta_l_interpolator():
-    """
-    Carica i punti digitalizzati del grafico Sandrolini (1996) (DR vs theta/l)
-    e restituisce la funzione interpolatrice cubica.
+def _load_section_interpolator(section: str) -> tuple[PchipInterpolator, float, float]:
+    """Carica e costruisce l'interpolatore monotono PCHIP per una sezione radiale."""
+    if section not in _CHART_FILES:
+        raise ValueError(f"Sezione non valida '{section}'. Usa 'Hub', 'Mean' o 'Tip'.")
 
-    Solleva FileNotFoundError se 'theta_l_sandrolini.csv' non e' nella cartella 'data/'.
-    """
-    if not _CSV_PATH.exists():
+    csv_path = _CHART_FILES[section]
+    if not csv_path.exists():
         raise FileNotFoundError(
-            f"File dei dati non trovato in: {_CSV_PATH}\n"
-            "Assicurati che 'theta_l_sandrolini.csv' sia presente nella cartella 'data/'."
+            f"File CSV non trovato per la sezione {section}: {csv_path}"
         )
 
-    # Caricamento dei punti ignorando l'intestazione CSV
-    dr_data, theta_l_data = np.loadtxt(
-        _CSV_PATH, delimiter=",", skiprows=1, unpack=True
+    # Legge solo le prime 2 colonne (D, phi_loss), compatibile anche con il CSV Tip a 4 colonne
+    d_data, phi_data = np.loadtxt(
+        csv_path, delimiter=",", skiprows=1, usecols=(0, 1), unpack=True
     )
 
-    # Interpolatore cubico con blocco agli estremi (bounds_error=True)
-    return interp1d(dr_data, theta_l_data, kind="cubic", bounds_error=True)
+    interp = PchipInterpolator(d_data, phi_data, extrapolate=False)
+    return interp, float(d_data.min()), float(d_data.max())
 
 
-# Variable interna per memorizzare l'istanza dell'interpolatore (lazy loading)
-_interpolator = None
-
-
-def evaluate_theta_l(dr: float) -> float:
+def evaluate_phi_loss(section: str, diffusion_factor: float) -> float:
     """
-    Restituisce lo spessore di quantita' di moto ridotto (theta/l)
-    dato il Local Diffusion Ratio di Lieblein (DR = w1 / w2).
+    Restituisce il parametro di perdita adimensionale Phi = Y_P * sin(beta2') / (2 * sigma)
+    dai grafici sperimentali del rotore di Sandrolini (1996).
 
-    Esempio di utilizzo:
-        from data.loss_charts import evaluate_theta_l
-        val = evaluate_theta_l(1.4)
+    Parametri:
+    - section: 'Hub', 'Mean' oppure 'Tip'
+    - diffusion_factor: Fattore di diffusione di Lieblein D [-] (intervallo [0.0, 0.7])
     """
-    global _interpolator
-    if _interpolator is None:
-        _interpolator = get_theta_l_interpolator()
+    sec_key = section.strip().capitalize()
+    if sec_key not in _interpolators:
+        _interpolators[sec_key] = _load_section_interpolator(sec_key)
 
-    return float(_interpolator(dr))
+    interp, d_min, d_max = _interpolators[sec_key]
+
+    if diffusion_factor < d_min or diffusion_factor > d_max:
+        raise ValueError(
+            f"Diffusion Factor D = {diffusion_factor:.4f} nella sezione '{sec_key}' "
+            f"fuori dal dominio del grafico Sandrolini [{d_min:.2f}, {d_max:.2f}]."
+        )
+
+    return float(interp(diffusion_factor))
 
 
 if __name__ == "__main__":
-    # Test esecuzione autonoma
-    print("=== TEST MODULO DATA/LOSS_CHARTS.PY ===")
-    print(f"Lettura file CSV da: {_CSV_PATH.name}")
-
-    test_dr = 1.5
-    theta_l_res = evaluate_theta_l(test_dr)
-    print(f"DR = {test_dr:.2f}  ->  theta/l = {theta_l_res:.4f}")
-
-    # Verifica blocco fuori scala
-    try:
-        evaluate_theta_l(2.5)
-    except ValueError as err:
-        print("\nVerifica bounds_error=True superata:")
-        print(f"ValueError intercettato: {err}")
+    print("=== TEST INTERPOLATORI SANDROLINI (1996) ===")
+    for sec in ("Hub", "Mean", "Tip"):
+        print(f"{sec:<5} | D = 0.35 -> Phi = {evaluate_phi_loss(sec, 0.35):.5f}")

@@ -43,7 +43,7 @@ def calculate_overall_performance(
 ) -> OverallPerformanceResult:
     """
     Riceve i risultati geometrici (machine.py), i triangoli (geometry.py) e
-    il rendimento (efficiency.py) per calcolare spinta ISO 13350 e potenze.
+    il rendimento (losses.py) per calcolare spinta ISO 13350 e potenze.
     """
     d_tip = float(design["D_tip_m"])
     d_hub = float(design["D_hub_m"])
