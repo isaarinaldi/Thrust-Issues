@@ -47,9 +47,9 @@ def calculate_specific_work(specific_head: float, rotor_efficiency: float) -> fl
 
 
 def calculate_outlet_swirl(
-    specific_work: float,
-    peripheral_speed: float,
-    work_done_factor: float,
+        specific_work: float,
+        peripheral_speed: float,
+        work_done_factor: float,
 ) -> float:
     """Velocità tangenziale in uscita c_theta2 = L / (zeta * U) [m/s]."""
     if peripheral_speed <= 0.0:
@@ -63,10 +63,10 @@ def calculate_outlet_swirl(
 # SEZIONE 1: Diffusion Factor D(r), Controllo Separazione e Perdita di Profilo Y_P
 # =============================================================================
 def compute_lieblein_diffusion_factor(
-    w1: float,
-    w2: float,
-    delta_w_theta: float,
-    sigma_local: float,
+        w1: float,
+        w2: float,
+        delta_w_theta: float,
+        sigma_local: float,
 ) -> float:
     """
     Calcola il Diffusion Factor di Lieblein locale:
@@ -82,8 +82,8 @@ def compute_lieblein_diffusion_factor(
 
 
 def check_diffusion_factor_limits(
-    d_values: Mapping[str, float],
-    d_max: float = 0.45,
+        d_values: Mapping[str, float],
+        d_max: float = 0.45,
 ) -> None:
     """
     Verifica che il Diffusion Factor D non superi il limite di separazione
@@ -106,10 +106,10 @@ def check_diffusion_factor_limits(
 
 
 def compute_Y_P_section_sandrolini(
-    section: str,
-    sigma_local: float,
-    beta2_deg: float,
-    d_factor: float,
+        section: str,
+        sigma_local: float,
+        beta2_deg: float,
+        d_factor: float,
 ) -> float:
     """
     Calcola il coefficiente di perdita di profilo Y_P(r) entrando nelle carte
@@ -129,13 +129,13 @@ def compute_Y_P_section_sandrolini(
 # SEZIONE 2: Coefficiente di Perdita Secondaria e di Gioco Y_{s+g} (Vavra)
 # =============================================================================
 def compute_Y_s_plus_g(
-    r_mean: float,
-    h_blade: float,
-    g_tip_m: float,
-    z_blades: int,
-    beta1_deg: float,
-    beta2_deg: float,
-    beta_inf_deg: float,
+        r_mean: float,
+        h_blade: float,
+        g_tip_m: float,
+        z_blades: int,
+        beta1_deg: float,
+        beta2_deg: float,
+        beta_inf_deg: float,
 ) -> float:
     """
     Calcola il coefficiente adimensionale di perdita secondaria e di gioco al tip Y_{s+g}
@@ -157,10 +157,10 @@ def compute_Y_s_plus_g(
 
 
 def compute_all_Y_loss_coefficients(
-    triangles: dict[str, dict[str, float]],
-    aero_design: Mapping[str, object],
-    design: Mapping[str, object],
-    d_max: float = 0.45,
+        triangles: dict[str, dict[str, float]],
+        aero_design: Mapping[str, object],
+        design: Mapping[str, object],
+        d_max: float = 0.45,
 ) -> YLossCoefficients:
     """
     Calcola i coefficienti Y_P (Hub, Mean, Tip) tramite Sandrolini (1996) e Y_{s+g} (Vavra),
@@ -266,17 +266,17 @@ def compute_all_Y_loss_coefficients(
 # SEZIONE 3: Energie Perse R [J/kg], Correzione Reynolds e Rendimento Rotore
 # =============================================================================
 def compute_profile_energy_losses(
-    y_p_hub: float,
-    y_p_mean: float,
-    y_p_tip: float,
-    w1_hub: float,
-    w1_mean: float,
-    w1_tip: float,
+        y_p_hub: float,
+        y_p_mean: float,
+        y_p_tip: float,
+        w1_hub: float,
+        w1_mean: float,
+        w1_tip: float,
 ) -> tuple[dict[str, float], float]:
     """Converte Y_P in energie perse R_P [J/kg] e applica la media di Simpson 1/3."""
-    r_p_hub = y_p_hub * (w1_hub**2) / 2.0
-    r_p_mean = y_p_mean * (w1_mean**2) / 2.0
-    r_p_tip = y_p_tip * (w1_tip**2) / 2.0
+    r_p_hub = y_p_hub * (w1_hub ** 2) / 2.0
+    r_p_mean = y_p_mean * (w1_mean ** 2) / 2.0
+    r_p_tip = y_p_tip * (w1_tip ** 2) / 2.0
 
     # Integrazione di Simpson (Sandrolini & Naldi)
     r_p_bar = (r_p_hub + r_p_tip + 4.0 * r_p_mean) / 6.0
@@ -284,11 +284,11 @@ def compute_profile_energy_losses(
 
 
 def apply_reynolds_correction(
-    r_p_bar: float,
-    w1_mean: float,
-    chord: float,
-    density: float,
-    viscosity: float,
+        r_p_bar: float,
+        w1_mean: float,
+        chord: float,
+        density: float,
+        viscosity: float,
 ) -> tuple[float, float, float]:
     """Applica la correzione di Reynolds alla perdita di profilo media."""
     re_mid = (density * w1_mean * chord) / viscosity
@@ -298,10 +298,10 @@ def apply_reynolds_correction(
 
 
 def calculate_rotor_efficiency(
-    y_results: Mapping[str, float],
-    triangles: dict[str, dict[str, float]],
-    chord: float,
-    config: Mapping[str, Any],
+        y_results: Mapping[str, float],
+        triangles: dict[str, dict[str, float]],
+        chord: float,
+        config: Mapping[str, Any],
 ) -> EfficiencyResult:
     """
     Calcola le perdite specifiche R_P*, R_{s+g}, il lavoro di Eulero L
@@ -333,7 +333,7 @@ def calculate_rotor_efficiency(
     )
 
     # 3. Perdite secondarie e di gioco R_{s+g}
-    r_sg = float(float(y_results["Y_sg"]) * (w1_m**2) / 2.0)
+    r_sg = float(float(y_results["Y_sg"]) * (w1_m ** 2) / 2.0)
 
     # 4. Lavoro di Eulero L = U_mean * c_theta2_mean [J/kg]
     l_euler = u_mean * c_theta2_mean
@@ -363,11 +363,11 @@ def calculate_rotor_efficiency(
 # SEZIONE 4: Orchestratore Unico (Coefficienti Y + Controllo D + Rendimento)
 # =============================================================================
 def compute_rotor_losses_and_efficiency(
-    triangles: dict[str, dict[str, float]],
-    aero_design: Mapping[str, object],
-    design: Mapping[str, object],
-    config: Mapping[str, Any],
-    d_max: float = 0.45,
+        triangles: dict[str, dict[str, float]],
+        aero_design: Mapping[str, object],
+        design: Mapping[str, object],
+        config: Mapping[str, Any],
+        d_max: float = 0.45,
 ) -> RotorLossesAndEfficiencyResult:
     """
     Esegue in un unico passaggio:
