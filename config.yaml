@@ -20,7 +20,7 @@ rotor_efficiency_initial: 0.80
 work_done_factor: 1.0
 
 # Geometric constraint
-tip_diameter_fraction: 0.995 #Chiedere a Francesco conferma (potenziale problema)
+tip_diameter_fraction: 1 #questa parte di codice va tolta
 
 # Specific speed search
 specific_speed_min: 3.0
@@ -34,3 +34,9 @@ max_mach_number: 0.3
 # Non ancora utilizzato: attualmente si calcolano Hub, Mean e Tip
 number_of_sections: 21 #Chiedere a Tommaso?? Non mi ricordo a cosa serviva
 
+
+# =============================================================================
+# RENDIMENTI ELETTROMECCANICI (Ipotesi di Progetto)
+# =============================================================================
+mechanical_efficiency: 0.95    # Rendimento meccanico per attriti sui cuscinetti (95%)
+motor_efficiency: 0.90         # Rendimento elettrico/magnetico del motore (90%)
