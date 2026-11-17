@@ -202,7 +202,18 @@ def main():
     print("\nVelocità in m/s; angoli in gradi.")
     print("In tutte le sezioni: c1 = c3 = Cm; alpha1 = alpha3 = 90°.")
 
-    return
+    # Risultati disponibili anche per gli altri moduli, senza cambiare
+    # l'esecuzione standalone di python main.py.
+    return {
+        "flow_rate": flow_rate,
+        "specific_head": specific_head,
+        "specific_work": specific_work,
+        "rotor_power": rotor_power,
+        "selected_design": selected_design,
+        "geometry": geometry,
+        "continuity": continuity,
+        "triangles": triangles,
+    }
 
 
 if __name__ == "__main__":
