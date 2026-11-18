@@ -12,9 +12,7 @@ from geometry import (
     calculate_velocity_triangles,
     hub_ratio_from_continuity,
 )
-from machine import check_continuity, eckert_search, select_design
-from thermo import operating_point
-
+from machine import check_continuity, eckert_search, operating_point, select_design
 try:
     from airfoil_design.airfoil_inputs import prepara_input_airfoil
     from airfoil_design.airfoil_machine import (
