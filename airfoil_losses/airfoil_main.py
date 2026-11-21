@@ -195,25 +195,28 @@ def progetta(dati, tabelle):
 
         return False
 
-
 def main(
-    config_path: Path | None = None,
-    input_data: Mapping[str, object] | None = None,
-) -> bool:
-    if config_path is None:
-        config_path = PROJECT_DIR / "airfoil_config.yaml"
+            config_path: Path | None = None,
+            input_data: Mapping[str, object] | None = None,
+    ) -> bool:
 
+        # Percorso del file YAML principale
+    if config_path is None:
+        config_path = PROJECT_DIR.parent / "config.yaml"
+
+    # Lettura della configurazione generale
     with Path(config_path).open("r", encoding="utf-8") as file:
-        dati_base = yaml.safe_load(file)
-    if not isinstance(dati_base, Mapping):
-        raise ValueError(
-            f"Il file di configurazione {config_path} deve contenere "
-            "una mappa YAML."
-        )
-    dati_base = dict(dati_base)
+        config_general = yaml.safe_load(file)
+
+    # Estrazione dei parametri Airfoil Design
+    dati_base = dict(config_general["airfoil"])
+
+    # Aggiunta dei dati provenienti dai triangoli di velocita
     if input_data is not None:
         if not isinstance(input_data, Mapping):
-            raise TypeError("Gli input aerodinamici devono essere una mappa.")
+            raise TypeError(
+                "Gli input aerodinamici devono essere una mappa."
+            )
         dati_base.update(input_data)
 
     tabelle = {

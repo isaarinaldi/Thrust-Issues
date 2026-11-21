@@ -1,15 +1,15 @@
 """Run updated preliminary design and NACA65 airfoil design together.
 
-This is deliberately a separate entry point: python main.py continues to
+This is deliberately a separate entry point: python preliminary_design.py continues to
 run the colleagues' original preliminary design and is not modified in flow.
 """
 
 from pathlib import Path
 import yaml
 
-from main import main as preliminary_main
-from airfoil_design.airfoil_inputs import prepara_input_airfoil
-from airfoil_design.airfoil_main import esegui_airfoil
+from preliminary_design import main as preliminary_main
+from airfoil_losses.airfoil_inputs import prepara_input_airfoil
+from airfoil_losses.airfoil_main import esegui_airfoil
 
 
 def run_integrated_airfoil():

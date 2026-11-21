@@ -4,8 +4,8 @@ import math
 
 import pytest
 
-from airfoil_design.airfoil_inputs import prepara_input_airfoil
-from airfoil_design.airfoil_machine import calcola_diffusion_factor
+from airfoil_losses.airfoil_inputs import prepara_input_airfoil
+from airfoil_losses.airfoil_machine import calcola_diffusion_factor
 
 
 def test_angle_conversion_mach_and_re():

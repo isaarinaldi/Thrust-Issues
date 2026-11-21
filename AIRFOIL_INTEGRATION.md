@@ -1,13 +1,13 @@
 # Integrazione Jet Fan -> NACA 65 (branch di revisione)
 
-Questo branch collega l'attuale `main.py` al modulo `airfoil_design` senza
+Questo branch collega l'attuale `preliminary_design.py` al modulo `airfoil_losses` senza
 modificare la logica del dimensionamento preliminare dei colleghi.
 
 ## Esecuzione
 
 ```bash
 pip install -r requirements.txt
-python main.py                 # algoritmo preliminare originale
+python preliminary_design.py                 # algoritmo preliminare originale
 python run_airfoil_integrated.py  # preliminare + NACA 65
 python -m pytest tests/test_airfoil_integration.py
 ```

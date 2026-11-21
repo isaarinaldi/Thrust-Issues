@@ -1,6 +1,7 @@
 from pathlib import Path
-
+import math
 import yaml
+from thermo import check_mach
 
 from machine import (
     operating_point,
@@ -13,6 +14,7 @@ from geometry import (
     annulus_geometry,
     hub_ratio_from_continuity,
     calculate_velocity_triangles,
+    outlet_geometry,
 )
 
 
@@ -26,6 +28,13 @@ def main():
 
     with config_path.open("r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
+
+    tip_clearance_ratio = config["tip_clearance_ratio"]
+
+    if not 0 <= tip_clearance_ratio < 0.5:
+        raise ValueError("tip_clearance_ratio deve essere compreso tra 0 e 0.5 escluso.")
+
+    tip_diameter_fraction = 1 - 2 * tip_clearance_ratio
 
     # ==========================================
     # 2. PUNTO DI FUNZIONAMENTO
@@ -53,7 +62,7 @@ def main():
         flow_rate=flow_rate,
         specific_head=specific_head,
         max_tip_diameter=config["max_tip_diameter"],
-        tip_diameter_fraction=config["tip_diameter_fraction"],
+        tip_diameter_fraction=tip_diameter_fraction,
         specific_speed_min=config["specific_speed_min"],
         specific_speed_max=config["specific_speed_max"],
         specific_speed_points=config["specific_speed_points"],
@@ -164,6 +173,7 @@ def main():
     print(f"Altezza pala = {geometry['blade_height']:.4f} m")
     print(f"Area anulare = {geometry['annulus_area']:.4f} m²")
 
+
     # ==========================================
     # 7. TRIANGOLI DI VELOCITA'
     # ==========================================
@@ -178,7 +188,7 @@ def main():
 
     print("\nTRIANGOLI DELLE VELOCITÀ")
     print(f"Cm = {c_m:.3f} m/s")
-    print(f"Q = {flow_rate_design:.3f} m³/s")
+
 
     print(
         f"\n{'Sezione':>8} {'U':>9} {'Delta Cu':>10}"
@@ -202,8 +212,70 @@ def main():
     print("\nVelocità in m/s; angoli in gradi.")
     print("In tutte le sezioni: c1 = c3 = Cm; alpha1 = alpha3 = 90°.")
 
+    # ==========================================
+    # VERIFICA MACH LUNGO LA PALA
+    # ==========================================
+
+    mach_results = check_mach(
+        triangles=triangles,
+        speed_of_sound=config["speed_of_sound"],
+        mach_limit=config["max_mach_number"],
+        section_count=config["number_of_sections"],
+    )
+
+    print("\nVERIFICA MACH LUNGO LA PALA")
+    print(f"Numero di sezioni = {mach_results['number_of_sections']}")
+    print(
+        f"Velocità relativa massima = "
+        f"{mach_results['max_relative_speed']:.3f} m/s"
+    )
+    print(
+        f"Velocità assoluta massima = "
+        f"{mach_results['max_absolute_speed']:.3f} m/s"
+    )
+    print(f"Mach relativo massimo = {mach_results['mach_relative']:.4f}")
+    print(f"Mach assoluto massimo = {mach_results['mach_absolute']:.4f}")
+    print(f"Mach massimo = {mach_results['mach_max']:.4f}")
+    print(f"Limite Mach = {mach_results['mach_limit']:.3f}")
+    print(
+        "Verifica Mach = "
+        + ("OK" if mach_results["mach_ok"] else "NON VERIFICATA")
+    )
+
+    # ==========================================
+    # CONTINUITÀ TRA ROTORE E USCITA
+    # ==========================================
+
+    total_area, outlet_velocity, tip_clearance = outlet_geometry(
+        flow_rate=flow_rate,
+        tip_radius=triangles["Tip"]["radius"],
+        tip_clearance_ratio=tip_clearance_ratio,
+    )
+
+    # Area anulare del rotore, trascurando gioco e bloccaggio delle pale [m²]
+    annulus_area = math.pi * (
+            triangles["Tip"]["radius"] ** 2
+            - triangles["Hub"]["radius"] ** 2
+    )
+
+    c_m = triangles["Tip"]["c_m"]
+
+    flow_rate_rotor = c_m * annulus_area
+    flow_rate_outlet = outlet_velocity * total_area
+
+    print("\nCONTINUITÀ TRA ROTORE E USCITA")
+    print(f"Portata di progetto = {flow_rate:.3f} m³/s")
+    print(f"Cm × A_anulare = {flow_rate_rotor:.3f} m³/s")
+    print(f"Gioco radiale = {tip_clearance * 1000:.2f} mm")
+    print(f"V_uscita × A_totale = {flow_rate_outlet:.3f} m³/s")
+    print(f"Area anulare = {annulus_area:.5f} m²")
+    print(f"Area totale di uscita = {total_area:.5f} m²")
+    print(f"Velocità di uscita calcolata = {outlet_velocity:.3f} m/s")
+    print("Q = Cm × A_anulare = V_uscita × A_totale")
+    print("Continuità della portata rispettata.")
+
     # Risultati disponibili anche per gli altri moduli, senza cambiare
-    # l'esecuzione standalone di python main.py.
+    # l'esecuzione standalone di python preliminary_design.py.
     return {
         "flow_rate": flow_rate,
         "specific_head": specific_head,
@@ -214,6 +286,7 @@ def main():
         "continuity": continuity,
         "triangles": triangles,
     }
+
 
 
 if __name__ == "__main__":

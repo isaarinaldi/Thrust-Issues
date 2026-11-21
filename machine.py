@@ -106,6 +106,7 @@ def eckert_search(
         )
 
     # Diametro limite adottato nel progetto [m]
+    #(questa linea di codice dovrebbe essere cancellata)#
     tip_diameter_limit = (
         tip_diameter_fraction * max_tip_diameter
     )
@@ -197,8 +198,6 @@ def check_continuity(
     # Velocità meridiana dal coefficiente di portata [m/s]
     c_m_eckert = phi * tip_speed
 
-    # Velocità meridiana necessaria per conservare la portata [m/s]
-    c_m_continuity = flow_rate / annulus_area
 
     # Portata ricavata dalla geometria e dal coefficiente phi [m³/s]
     flow_rate_check = annulus_area * c_m_eckert
@@ -217,7 +216,6 @@ def check_continuity(
 
     return {
         "c_m_eckert": c_m_eckert,
-        "c_m_continuity": c_m_continuity,
         "flow_rate_check": flow_rate_check,
         "flow_rate_deviation": flow_rate_deviation,
         "continuity_ok": continuity_ok,

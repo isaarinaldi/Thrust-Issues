@@ -164,3 +164,126 @@ def calculate_velocity_triangles(
 
     return triangles
 
+# ==========================================
+# VELOCITÀ MASSIME LUNGO LA PALA
+# ==========================================
+
+def maximum_section_speeds(
+    *,
+    axial_velocity,
+    angular_velocity,
+    hub_radius,
+    tip_radius,
+    outlet_swirl_tip,
+    section_count,
+):
+    """
+    Calcola le velocità massime su section_count sezioni radiali.
+
+    Ipotesi:
+        - velocità assiale costante;
+        - prerotazione nulla;
+        - legge free vortex all'uscita del rotore.
+
+    outlet_swirl_tip: componente tangenziale c_theta2 al tip [m/s].
+
+    Restituisce:
+        max_relative_speed [m/s]
+        max_absolute_speed [m/s]
+    """
+
+    # Controllo degli input
+    values = (
+        axial_velocity,
+        angular_velocity,
+        hub_radius,
+        tip_radius,
+    )
+
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError(
+            "Velocità assiale, velocità angolare e raggi "
+            "devono essere positivi e finiti."
+        )
+
+    if tip_radius <= hub_radius:
+        raise ValueError(
+            "Il raggio al tip deve essere maggiore del raggio al mozzo."
+        )
+
+    if not math.isfinite(outlet_swirl_tip):
+        raise ValueError(
+            "La componente tangenziale al tip deve essere finita."
+        )
+
+    if (
+        isinstance(section_count, bool)
+        or not isinstance(section_count, int)
+        or section_count < 2
+    ):
+        raise ValueError(
+            "Il numero di sezioni deve essere un intero almeno pari a 2."
+        )
+
+    max_relative_speed = 0.0
+    max_absolute_speed = 0.0
+
+    for index in range(section_count):
+
+        # Raggi equidistanti dal mozzo alla punta, estremi inclusi [m]
+        radius = (
+            hub_radius
+            + (tip_radius - hub_radius)
+            * index / (section_count - 1)
+        )
+
+        # Velocità periferica locale [m/s]
+        U = angular_velocity * radius
+
+        # Componente tangenziale in uscita: r * c_theta2 = costante
+        c_theta2 = outlet_swirl_tip * tip_radius / radius
+
+        # Velocità relative all'ingresso e all'uscita [m/s]
+        w1 = math.hypot(axial_velocity, U)
+        w2 = math.hypot(axial_velocity, U - c_theta2)
+
+        # Velocità assolute all'ingresso e all'uscita [m/s]
+        c1 = axial_velocity
+        c2 = math.hypot(axial_velocity, c_theta2)
+
+        # Aggiornamento dei massimi
+        max_relative_speed = max(max_relative_speed, w1, w2)
+        max_absolute_speed = max(max_absolute_speed, c1, c2)
+
+    return max_relative_speed, max_absolute_speed
+
+def outlet_geometry(flow_rate, tip_radius, tip_clearance_ratio):
+    """Uscita circolare senza mozzo, con diametro uguale al condotto al rotore."""
+
+    if not math.isfinite(flow_rate) or flow_rate <= 0:
+        raise ValueError("La portata deve essere positiva e finita.")
+
+    if not math.isfinite(tip_radius) or tip_radius <= 0:
+        raise ValueError("Il raggio al tip deve essere positivo e finito.")
+
+    if (
+        not math.isfinite(tip_clearance_ratio)
+        or not 0 <= tip_clearance_ratio < 0.5
+    ):
+        raise ValueError(
+            "tip_clearance_ratio deve essere compreso tra 0 e 0.5 escluso."
+        )
+
+    tip_diameter = 2 * tip_radius
+
+    # Dtip = Dcondotto * (1 - 2 * rapporto di gioco)
+    duct_diameter = tip_diameter / (1 - 2 * tip_clearance_ratio)
+
+    # Gioco radiale [m]
+    tip_clearance = tip_clearance_ratio * duct_diameter
+
+    # Area totale e velocità media di uscita
+    total_area = math.pi * (duct_diameter / 2)**2
+    outlet_velocity = flow_rate / total_area
+
+    return total_area, outlet_velocity, tip_clearance
