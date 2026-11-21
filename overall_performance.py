@@ -74,7 +74,7 @@ def calculate_overall_performance(
     margin_pct = ((thrust_calc - f_nominal) / f_nominal) * 100.0
 
     # 3. Gerarchia delle potenze [kW]
-    p_useful_kw = (0.5 * m_dot * (c_m**2)) / 1000.0
+    p_useful_kw = (m_dot * eta_global * l_euler) / 1000.0
     p_rot_kw = (m_dot * l_euler) / 1000.0
     p_shaft_kw = p_rot_kw / eta_mech
     p_elec_kw = p_shaft_kw / eta_motor

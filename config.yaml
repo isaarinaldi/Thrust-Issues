@@ -22,6 +22,9 @@ work_done_factor: 1.0
 # Geometric constraint
 tip_diameter_fraction: 1 #questa parte di codice va tolta
 
+# Gioco radiale tra estremita della pala e carcassa
+tip_clearance_mm: 1.0
+
 # Specific speed search
 specific_speed_min: 3.0
 specific_speed_max: 7.0

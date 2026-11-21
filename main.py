@@ -2,6 +2,23 @@ from pathlib import Path
 
 import yaml
 
+import csv
+from collections.abc import Mapping
+
+from airfoil_interpolation import interpola_curva, interpola_2d
+
+from machine import (
+    scelta_profilo,
+    calcola_diffusion_factor,
+    curvatura_iniziale,
+    calcola_incidenza_lieblein,
+    calcola_deviazione_lieblein,
+    curvatura_corretta,
+    convergenza_curvatura,
+    dimensionamento_geometrico,
+    calcola_calettamento,
+    verifica_aerodinamica_finale,
+)
 from machine import (
     operating_point,
     eckert_search,
@@ -16,7 +33,27 @@ from geometry import (
 )
 
 
-def main():
+import math
+from typing import Any
+
+from losses import compute_rotor_losses_and_efficiency
+from overall_performance import calculate_overall_performance
+
+
+
+
+
+# ============================================================
+# PERCORSI COMUNI DEL PROGETTO
+# ============================================================
+
+PROJECT_DIR = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_DIR / "data"
+
+
+
+
+def main(rotor_efficiency_override=None):
 
     # ==========================================
     # 1. LETTURA INPUT
@@ -26,6 +63,16 @@ def main():
 
     with config_path.open("r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
+
+
+    # Aggiornamento del rendimento durante la convergenza
+    if rotor_efficiency_override is not None:
+        if not 0 < rotor_efficiency_override <= 1:
+            raise ValueError("Rendimento del rotore non valido.")
+
+        config["rotor_efficiency_initial"] = rotor_efficiency_override
+
+
 
     # ==========================================
     # 2. PUNTO DI FUNZIONAMENTO
@@ -204,6 +251,43 @@ def main():
 
     # Risultati disponibili anche per gli altri moduli, senza cambiare
     # l'esecuzione standalone di python main.py.
+
+
+
+    # ============================================================
+    # AIRFOIL DESIGN - NACA 65
+    # COLLEGAMENTO CON IL DIMENSIONAMENTO PRELIMINARE
+    # ============================================================
+
+    # Preparazione degli input dai triangoli di velocita
+    dati_airfoil = prepara_input_airfoil(
+        triangles,
+        config["airfoil"],
+        speed_of_sound=config["speed_of_sound"],
+        air_density=config["air_density"],
+        dynamic_viscosity=config["dynamic_viscosity"],
+    )
+
+    print("\nINPUT AIRFOIL DALLA SEZIONE MEDIA")
+
+    for key in (
+        "W1", "W2", "beta1", "beta2",
+        "Ma", "Re", "rhub", "rm", "rtip"
+    ):
+        print(f"  {key}: {dati_airfoil[key]:.5f}")
+
+    # Progettazione del profilo alare
+    print("\nPROGETTAZIONE DEL PROFILO ALARE NACA 65")
+
+    risultato_airfoil = esegui_airfoil(dati_airfoil)
+    verifica_airfoil = bool(risultato_airfoil)
+
+    if not verifica_airfoil:
+        raise ValueError("Airfoil Design non verificato.")
+
+
+
+
     return {
         "flow_rate": flow_rate,
         "specific_head": specific_head,
@@ -213,8 +297,627 @@ def main():
         "geometry": geometry,
         "continuity": continuity,
         "triangles": triangles,
+
+        # Risultati Airfoil Design
+        "airfoil_inputs": dati_airfoil,
+        "airfoil_verified": verifica_airfoil,
+        "airfoil_result": risultato_airfoil,}
+
+
+
+
+# ============================================================
+# AIRFOIL DESIGN - NACA 65
+# ============================================================
+# Preparazione input, correlazioni di Lieblein,
+# dimensionamento geometrico e verifiche aerodinamiche.
+# ============================================================
+
+
+def prepara_input_airfoil(
+    triangles,
+    config,
+    *,
+    speed_of_sound=None,
+    air_density=None,
+    dynamic_viscosity=None,
+):
+    mean = triangles["Mean"]
+    hub = triangles["Hub"]
+    tip = triangles["Tip"]
+
+    dati = dict(config)
+
+    # Velocita' [m/s] alla sezione media.
+    dati["C1"] = mean["c1"]
+    dati["C2"] = mean["c2"]
+    dati["W1"] = mean["w1"]
+    dati["W2"] = mean["w2"]
+
+    # La geometria usa beta dalla tangente; le carte Lieblein, dall'asse.
+    dati["beta1"] = 90.0 - mean["beta1"]
+    dati["beta2"] = 90.0 - mean["beta2"]
+
+    # Raggi del rotore (geometria gia' verificata per continuita').
+    dati["rtip"] = tip["radius"]
+    dati["rhub"] = hub["radius"]
+    dati["rm"] = mean["radius"]
+
+    # Mach RELATIVO in ingresso al rotore, non Mach assoluto.
+    if speed_of_sound is not None:
+        if speed_of_sound <= 0:
+            raise ValueError("speed_of_sound deve essere positivo.")
+        dati["Ma"] = mean["w1"] / speed_of_sound
+    elif "Ma1" in mean:
+        # Compatibilita' con i dati precedenti, se presenti.
+        dati["Ma"] = mean["Ma1"]
+
+    # Reynolds relativo riferito alla corda preliminare c=(rtip-rhub)/AR.
+    # In assenza di proprieta' fisiche, conserva il valore della config.
+    if air_density is not None or dynamic_viscosity is not None:
+        if air_density is None or dynamic_viscosity is None:
+            raise ValueError("Re richiede sia densita' che viscosita'.")
+        AR = float(dati["AR"])
+        if air_density <= 0 or dynamic_viscosity <= 0 or AR <= 0:
+            raise ValueError("Densita', viscosita' e AR devono essere positivi.")
+        c = (dati["rtip"] - dati["rhub"]) / AR
+        dati["Re"] = air_density * mean["w1"] * c / dynamic_viscosity
+
+    if "Ma" not in dati:
+        raise ValueError("Mach mancante: indicare speed_of_sound o Ma1.")
+
+    return dati
+
+
+
+
+
+def _leggi_tabella(percorso: Path, colonne: tuple[str, ...]) -> list[dict[str, str]]:
+    with percorso.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        if reader.fieldnames is None or not set(colonne).issubset(reader.fieldnames):
+            raise ValueError(f"Tabella CSV non valida: {percorso}")
+        return list(reader)
+
+
+def progetta(dati, tabelle):
+    profilo, tmax_c, sigma_prog = scelta_profilo(dati)
+    print("Profilo selezionato:", profilo)
+    print("Spessore relativo:", tmax_c)
+    print("Solidità preliminare:", sigma_prog)
+    D = calcola_diffusion_factor(dati)
+    print("Diffusion Factor:", round(D, 4))
+    if D <= dati["D_max"]:
+        print("Solidita preliminare accettata")
+    else:
+        return False
+    theta0 = curvatura_iniziale(dati)
+    print("Curvatura iniziale:", theta0, "gradi")
+
+    punti_i0 = tabelle["i0"]
+    i0_10 = interpola_2d(punti_i0, dati["beta1"], sigma_prog)
+
+    print("Incidenza di riferimento:", round(i0_10, 3), "gradi")
+
+    # INTERPOLAZIONE DEL COEFFICIENTE n
+
+    punti_n = tabelle["n"]
+    n = interpola_2d(punti_n, dati["beta1"], sigma_prog)
+
+    print("Coefficiente n:", round(n, 4))
+
+    # PRIMA INCIDENZA OTTIMALE DI LIEBLEIN
+
+    i_rif_0 = calcola_incidenza_lieblein(
+        theta0, i0_10, dati["Kti"], dati["Ksh"], n
+    )
+
+    print("Prima incidenza ottimale:", round(i_rif_0, 3), "gradi")
+
+    # 9. PRIMA DEVIAZIONE DI LIEBLEIN
+
+    tabella_deviazione = tabelle["deviazione"]
+    angoli_delta = [float(riga["alpha_deg"]) for riga in tabella_deviazione]
+    valori_m = [float(riga["m"]) for riga in tabella_deviazione]
+    valori_b = [float(riga["b"]) for riga in tabella_deviazione]
+    punti_delta0 = tabelle["delta0"]
+    delta0_10 = interpola_2d(punti_delta0, dati["beta1"], sigma_prog)
+
+    m = interpola_curva(angoli_delta, valori_m, dati["beta1"])
+    b = interpola_curva(angoli_delta, valori_b, dati["beta1"])
+
+    delta_0 = calcola_deviazione_lieblein(
+        theta0, delta0_10, m, b, sigma_prog, dati["Kdelta_t"]
+    )
+
+    print("Prima deviazione:", round(delta_0, 3), "gradi")
+
+    # PRIMA CURVATURA CORRETTA
+
+    theta1 = curvatura_corretta(
+        dati["beta1"], dati["beta2"], i_rif_0, delta_0
+    )
+
+    print("Prima curvatura corretta:", round(theta1, 3), "gradi")
+
+    # CONVERGENZA ITERATIVA DELLA CURVATURA
+
+    theta_conv, i_conv, delta_conv, n_iter = convergenza_curvatura(
+        theta1,
+        dati["beta1"], dati["beta2"],
+        i0_10, dati["Kti"], dati["Ksh"], n,
+        delta0_10, m, b, sigma_prog, dati["Kdelta_t"],
+        dati["epsilon_theta_deg"], dati["max_iter_theta"]
+    )
+
+    print("Curvatura convergente:", round(theta_conv, 4), "gradi")
+    print("Incidenza finale:", round(i_conv, 4), "gradi")
+    print("Deviazione finale:", round(delta_conv, 4), "gradi")
+    print("Numero di iterazioni:", n_iter)
+
+    # DIMENSIONAMENTO GEOMETRICO
+
+    h, c, sprog, Z, delta_phi, seff, sigma_eff = dimensionamento_geometrico(
+        dati["rtip"], dati["rhub"], dati["rm"],
+        dati["AR"], sigma_prog
+    )
+
+    print("Altezza pala:", round(h, 4), "m")
+    print("Corda:", round(c, 4), "m")
+    print("Passo preliminare:", round(sprog, 4), "m")
+    print("Numero di pale:", Z)
+    print("Spaziatura angolare:", round(delta_phi, 3), "gradi")
+    print("Passo effettivo:", round(seff, 4), "m")
+    print("Solidita effettiva:", round(sigma_eff, 4))
+
+    # INCIDENZA E DEVIAZIONE EFFETTIVE
+
+    i0_eff = interpola_2d(punti_i0, dati["beta1"], sigma_eff)
+    n_eff = interpola_2d(punti_n, dati["beta1"], sigma_eff)
+    delta0_eff = interpola_2d(punti_delta0, dati["beta1"], sigma_eff)
+
+    i_eff = calcola_incidenza_lieblein(
+        theta_conv, i0_eff, dati["Kti"], dati["Ksh"], n_eff
+    )
+
+    delta_eff = calcola_deviazione_lieblein(
+        theta_conv, delta0_eff, m, b, sigma_eff, dati["Kdelta_t"]
+    )
+
+    # ANGOLO DI CALETTAMENTO
+
+    gamma = calcola_calettamento(
+        dati["beta1"], dati["beta2"], i_eff, delta_eff
+    )
+
+    print("Incidenza effettiva:", round(i_eff, 3), "gradi")
+    print("Deviazione effettiva:", round(delta_eff, 3), "gradi")
+    print("Angolo di calettamento:", round(gamma, 3), "gradi")
+
+    # VERIFICA AERODINAMICA FINALE
+
+    dati_finali = dati.copy()
+    dati_finali["sigma_prog"] = sigma_eff
+
+    D_eff = calcola_diffusion_factor(dati_finali)
+
+    de_haller = dati["W2"] / dati["W1"]
+
+    verifica = verifica_aerodinamica_finale(
+        D_eff,
+        de_haller,
+        dati["D_max"],
+        dati["de_haller_min"]
+    )
+
+    print("Diffusion Factor finale:", round(D_eff, 4))
+    print("Rapporto De Haller:", round(de_haller, 4))
+
+    if verifica:
+        print("VERIFIED AIRFOIL PROFILE")
+        print("Solidita effettiva approvata:", sigma_eff)
+        print("Corda finale:", round(c, 4), "m")
+        print("Numero di pale:", Z)
+        print("Angolo di calettamento:", round(gamma, 3), "gradi")
+
+
+        return {
+            "profile": profilo,
+            "tmax_c": tmax_c,
+            "sigma_prog": sigma_prog,
+            "sigma_eff": sigma_eff,
+            "chord": c,
+            "Z": Z,
+            "stagger_deg": gamma,
+            "D_factor": D_eff,
+            "de_haller": de_haller,
+        }
+
+
+    else:
+        if de_haller < dati["de_haller_min"]:
+            raise ValueError(
+                "De Haller non soddisfatto: modificare i triangoli di velocita"
+            )
+
+        return False
+
+def airfoil_design_main(
+                config_path: Path | None = None,
+                input_data: Mapping[str, object] | None = None,
+        ) -> bool:
+
+
+        # Percorso del file YAML principale
+    if config_path is None:
+        config_path = PROJECT_DIR / "config.yaml"
+
+    # Lettura della configurazione generale
+    with Path(config_path).open("r", encoding="utf-8") as file:
+        config_general = yaml.safe_load(file)
+
+    # Estrazione dei parametri Airfoil Design
+    dati_base = dict(config_general["airfoil"])
+
+    # Aggiunta dei dati provenienti dai triangoli di velocita
+    if input_data is not None:
+        if not isinstance(input_data, Mapping):
+            raise TypeError(
+                "Gli input aerodinamici devono essere una mappa."
+            )
+        dati_base.update(input_data)
+
+    tabelle = {
+        "i0": [
+            (float(r["alpha_deg"]), float(r["sigma"]), float(r["i0_10_deg"]))
+            for r in _leggi_tabella(
+                DATA_DIR / "lieblein_i0.csv",
+                ("alpha_deg", "sigma", "i0_10_deg"),
+            )
+        ],
+        "n": [
+            (float(r["alpha_deg"]), float(r["sigma"]), float(r["n"]))
+            for r in _leggi_tabella(
+                DATA_DIR / "lieblein_n.csv", ("alpha_deg", "sigma", "n")
+            )
+        ],
+        "delta0": [
+            (
+                float(r["alpha_deg"]),
+                float(r["sigma"]),
+                float(r["delta0_10_deg"]),
+            )
+            for r in _leggi_tabella(
+                DATA_DIR / "lieblein_delta0_sigma.csv",
+                ("alpha_deg", "sigma", "delta0_10_deg"),
+            )
+        ],
+        "deviazione": _leggi_tabella(
+            DATA_DIR / "lieblein_deviazione.csv",
+            ("alpha_deg", "m", "b"),
+        ),
+    }
+
+    soluzione_trovata = False
+    sigma_iniziale = float(dati_base["sigma_prog"])
+    sigma_step = float(dati_base["sigma_step"])
+    sigma_max = float(dati_base["sigma_max"])
+    max_iter_sigma = int(dati_base["max_iter_sigma"])
+    if sigma_iniziale <= 0 or sigma_step <= 0 or sigma_max < sigma_iniziale:
+        raise ValueError("Limiti di solidita non validi nella configurazione.")
+    if max_iter_sigma < 1:
+        raise ValueError("max_iter_sigma deve essere almeno 1.")
+
+    for tentativo in range(max_iter_sigma):
+        sigma = round(sigma_iniziale + tentativo * sigma_step, 6)
+        if sigma > sigma_max:
+            break
+
+        dati_tentativo = dict(dati_base)
+        dati_tentativo["sigma_prog"] = sigma
+
+        print("Tentativo:", tentativo + 1, "Solidita:", sigma)
+
+        risultato = progetta(dati_tentativo, tabelle)
+
+        if risultato:
+            return risultato
+
+    raise ValueError("Nessuna soluzione trovata nei limiti di solidita")
+
+
+def esegui_airfoil(dati: Mapping[str, object]) -> bool:
+    return airfoil_design_main(input_data=dati)
+
+
+
+
+# ============================================================
+# CALCOLO PERDITE E PRESTAZIONI 3 PARTE
+# ============================================================
+
+def _load_yaml(file_path: Path) -> dict[str, Any]:
+    """Carica un file YAML verificandone l'esistenza e la validità."""
+    if not file_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {file_path.resolve()}")
+    with file_path.open("r", encoding="utf-8") as file:
+        data = yaml.safe_load(file)
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid YAML mapping in: {file_path.resolve()}")
+    return data
+
+
+def _resolve_path(path_like: str | Path) -> Path:
+    """Risolve il percorso rispetto alla directory corrente o alla cartella del progetto."""
+    candidate = Path(path_like)
+    if candidate.exists():
+        return candidate
+    return PROJECT_DIR / candidate
+
+
+
+# ============================================================
+# PERFORMANCE DESIGN - COLLEGAMENTO AL MAIN GENERALE
+# ============================================================
+
+def run_main_performance(
+            config_path: str | Path = "config.yaml",
+            eta_override: float | None = None,
+) -> dict[str, Any]:
+
+    # 1. Lettura dei parametri generali
+    config = _load_yaml(_resolve_path(config_path))
+
+    # 2. Esecuzione del dimensionamento completo
+    risultati = main(
+        rotor_efficiency_override=eta_override
+    )
+    if not isinstance(risultati, dict):
+        raise ValueError("Il main non ha restituito risultati validi.")
+
+    # 3. Acquisizione dei risultati
+    selected_design = risultati["selected_design"]
+    geometry = risultati["geometry"]
+    triangles = risultati["triangles"]
+
+    dati_airfoil = risultati["airfoil_inputs"]
+    verifica_airfoil = risultati["airfoil_verified"]
+
+    # ============================================================
+    # RISULTATI DEL DIMENSIONAMENTO AERODINAMICO
+    # ============================================================
+
+    profilo = risultati["airfoil_result"]
+
+    print("\nRISULTATI AIRFOIL ACQUISITI")
+    print("Profilo:", profilo["profile"])
+    print("Numero di pale:", profilo["Z"])
+    print("Corda:", round(profilo["chord"], 4), "m")
+    print("Solidita effettiva:", round(profilo["sigma_eff"], 4))
+    print("Angolo di calettamento:", round(profilo["stagger_deg"], 3), "gradi")
+    print("Diffusion Factor:", round(profilo["D_factor"], 4))
+
+    profilo = risultati["airfoil_result"]
+
+    print("\nRISULTATI AERODINAMICI ACQUISITI")
+    print("Numero di pale:", profilo["Z"])
+    print("Corda:", round(profilo["chord"], 4), "m")
+    print("Solidita effettiva:", round(profilo["sigma_eff"], 4))
+
+    if not verifica_airfoil:
+        raise ValueError("Airfoil Design non verificato.")
+
+    # 4. Verifica del collegamento
+    print("\n======================================")
+    print("PERFORMANCE DESIGN - INPUT ACQUISITI")
+    print("======================================")
+
+    print("Diametro esterno:", geometry["tip_diameter"], "m")
+    print("Diametro mozzo:", geometry["hub_diameter"], "m")
+    print("Sezioni disponibili:", list(triangles.keys()))
+    print("Airfoil verificato:", verifica_airfoil)
+
+    # 5. Restituzione dei dati per il calcolo delle perdite
+
+
+    # ============================================================
+    # 5. PREPARAZIONE DEGLI INPUT PER IL CALCOLO DELLE PERDITE
+    # ============================================================
+
+    # Geometria richiesta dal modulo losses.py
+    design_losses = {
+        "D_tip_m": geometry["tip_diameter"],
+        "D_hub_m": geometry["hub_diameter"],
+        "tip_clearance_mm": config["tip_clearance_mm"],
+    }
+
+    # Allineamento dei nomi delle proprieta dell'aria
+    config_losses = dict(config)
+    config_losses["air_density_kg_m3"] = config["air_density"]
+    config_losses["dynamic_viscosity_Pa_s"] = config["dynamic_viscosity"]
+
+    # Copia dei triangoli, senza modificare quelli originali
+    triangles_losses = {
+        section: dict(values)
+        for section, values in triangles.items()
+    }
+
+    # Angolo medio relativo per la correlazione di Vavra
+    mean = triangles_losses["Mean"]
+
+    beta_inf = math.degrees(
+        math.atan2(
+            mean["c_m"],
+            mean["U"] - mean["c_theta2"] / 2.0
+        )
+    )
+
+    mean["beta_inf"] = beta_inf
+
+
+    # ============================================================
+    # 6. CALCOLO PERDITE AERODINAMICHE E RENDIMENTO ROTORE
+    # ============================================================
+
+    rotor_performance = compute_rotor_losses_and_efficiency(
+        triangles=triangles_losses,
+        aero_design=profilo,
+        design=design_losses,
+        config=config_losses,
+        d_max=config["airfoil"]["D_max"],
+    )
+
+    print("\n========================================")
+    print("VERIFICA PRESTAZIONALE DEL ROTORE")
+    print("========================================")
+
+    print(
+        "Diffusion Factor Hub:",
+        round(rotor_performance["D_hub"], 4)
+    )
+    print(
+        "Diffusion Factor Mean:",
+        round(rotor_performance["D_mean"], 4)
+    )
+    print(
+        "Diffusion Factor Tip:",
+        round(rotor_performance["D_tip"], 4)
+    )
+
+    print(
+        "Perdita specifica totale:",
+        round(rotor_performance["R_total_J_kg"], 3),
+        "J/kg"
+    )
+
+    print(
+        "Rendimento del rotore:",
+        round(rotor_performance["eta_rot"] * 100, 2),
+        "%"
+    )
+
+
+    # ============================================================
+    # 7. CALCOLO DELLE PRESTAZIONI COMPLESSIVE DEL JET FAN
+    # ============================================================
+
+    # Adattamento della geometria
+    design_overall = {
+        "D_tip_m": geometry["tip_diameter"],
+        "D_hub_m": geometry["hub_diameter"],
+        "c_m_m_s": triangles["Mean"]["c_m"],
+    }
+
+    # Adattamento dei parametri generali
+    config_overall = dict(config)
+    config_overall["air_density_kg_m3"] = config["air_density"]
+    config_overall["nominal_thrust_N"] = config["nominal_thrust"]
+
+    # Calcolo delle prestazioni complessive
+    overall_result = calculate_overall_performance(
+        design=design_overall,
+        triangles=triangles,
+        eff_result=rotor_performance,
+        config=config_overall,
+    )
+
+    print("\n======================================")
+    print("PRESTAZIONI COMPLESSIVE DEL JET FAN")
+    print("======================================")
+
+    print("Spinta calcolata:", round(overall_result["thrust_N"], 2), "N")
+    print("Spinta verificata:", overall_result["thrust_verified"])
+    print("Rendimento globale del fluido:",
+          round(overall_result["eta_global"] * 100, 2), "%")
+    print("Potenza elettrica:",
+          round(overall_result["P_elec_kW"], 2), "kW")
+    print("Rendimento complessivo:",
+          round(overall_result["eta_overall"] * 100, 2), "%")
+
+
+
+
+
+
+
+    return {
+        "config": config,
+        "selected_design": selected_design,
+        "geometry": geometry,
+        "triangles": triangles,
+        "airfoil_inputs": dati_airfoil,
+        "airfoil_verified": verifica_airfoil,
+        "airfoil_result": profilo,
+        "rotor_performance": rotor_performance,
+        "overall_performance": overall_result,
     }
 
 
+
+# ============================================================
+# CONVERGENZA ITERATIVA DEL RENDIMENTO DEL ROTORE
+# ============================================================
+
+def run_performance_convergence(
+    config_path="config.yaml",
+    tolerance=1e-4,
+    max_iterations=20,
+    relaxation=0.5,
+):
+
+    config = _load_yaml(_resolve_path(config_path))
+    eta_assumed = float(config["rotor_efficiency_initial"])
+
+    for iteration in range(1, max_iterations + 1):
+
+        print(f"\n========== ITERAZIONE {iteration} ==========")
+        print(f"Rendimento ipotizzato: {eta_assumed:.5f}")
+
+        risultati = run_main_performance(
+            config_path,
+            eta_override=eta_assumed,
+        )
+
+        eta_calculated = float(
+            risultati["rotor_performance"]["eta_rot"]
+        )
+
+        if not math.isfinite(eta_calculated) or not 0 < eta_calculated <= 1:
+            raise ValueError("Rendimento calcolato non fisico.")
+
+        delta = abs(eta_calculated - eta_assumed)
+
+        print(f"Rendimento calcolato: {eta_calculated:.5f}")
+        print(f"Errore di convergenza: {delta:.6f}")
+
+        if delta < tolerance:
+            print("\nCONVERGENZA DEL RENDIMENTO RAGGIUNTA")
+            print(f"Iterazioni: {iteration}")
+            print(f"Rendimento finale: {eta_calculated * 100:.2f}%")
+
+            risultati["convergence"] = {
+                "iterations": iteration,
+                "eta_rot": eta_calculated,
+                "error": delta,
+            }
+
+            return risultati
+
+        eta_assumed = (
+            (1.0 - relaxation) * eta_assumed
+            + relaxation * eta_calculated
+        )
+
+    raise RuntimeError(
+        "Convergenza non raggiunta entro il numero massimo di iterazioni."
+    )
+
+
+
+
+# ============================================================
+# AVVIO DEL PROGRAMMA COMPLETO
+# ============================================================
+
 if __name__ == "__main__":
-    main()
+    run_performance_convergence()
