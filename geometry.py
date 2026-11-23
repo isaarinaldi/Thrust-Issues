@@ -110,11 +110,26 @@ def calculate_velocity_triangles(
         work_done_factor * rotor_efficiency_initial * tip_speed
     )
 
-    sections = {
-        "Hub": geometry["hub_radius"],
-        "Mean": geometry["mean_radius"],
-        "Tip": tip_radius,
-    }
+
+    r_hub = geometry["hub_radius"]
+    r_tip = geometry["tip_radius"]
+
+    sections = {}
+
+    for j in range(9):
+        r = r_hub + j * (r_tip - r_hub) / 8
+
+        if j == 0:
+            nome = "Hub"
+        elif j == 4:
+            nome = "Mean"
+        elif j == 8:
+            nome = "Tip"
+        else:
+            nome = f"S{j + 1}"
+
+        sections[nome] = r
+
 
     triangles = {}
 

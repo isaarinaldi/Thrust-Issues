@@ -52,7 +52,7 @@ airfoil:
   # Scelta del profilo
   profilo: NACA65
   tmax_c: 0.10
-  sigma_prog: 1.0
+  sigma_prog: 0.5
 
   # Limiti aerodinamici
   D_max: 0.45
@@ -72,5 +72,5 @@ airfoil:
 
   # Ciclo esterno della solidita
   sigma_step: 0.02
-  sigma_max: 1.14
-  max_iter_sigma: 8
+  sigma_max: 2.0
+  max_iter_sigma: 81

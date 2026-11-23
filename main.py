@@ -328,6 +328,22 @@ def prepara_input_airfoil(
 
     dati = dict(config)
 
+
+    # Dati aerodinamici delle 9 sezioni radiali
+    dati["sezioni_radiali"] = {}
+
+    for nome, sec in triangles.items():
+        dati["sezioni_radiali"][nome] = {
+            "radius": sec["radius"],
+            "W1": sec["w1"],
+            "W2": sec["w2"],
+            "beta1": 90.0 - sec["beta1"],
+            "beta2": 90.0 - sec["beta2"],
+        }
+
+    print("Sezioni Airfoil:", list(dati["sezioni_radiali"]))
+
+
     # Velocita' [m/s] alla sezione media.
     dati["C1"] = mean["c1"]
     dati["C2"] = mean["c2"]
@@ -363,8 +379,12 @@ def prepara_input_airfoil(
         c = (dati["rtip"] - dati["rhub"]) / AR
         dati["Re"] = air_density * mean["w1"] * c / dynamic_viscosity
 
+
     if "Ma" not in dati:
         raise ValueError("Mach mancante: indicare speed_of_sound o Ma1.")
+
+    # Conserva i triangoli di tutte le sezioni radiali
+    dati["triangles"] = triangles
 
     return dati
 
@@ -372,12 +392,143 @@ def prepara_input_airfoil(
 
 
 
-def _leggi_tabella(percorso: Path, colonne: tuple[str, ...]) -> list[dict[str, str]]:
-    with percorso.open("r", encoding="utf-8", newline="") as file:
-        reader = csv.DictReader(file)
-        if reader.fieldnames is None or not set(colonne).issubset(reader.fieldnames):
-            raise ValueError(f"Tabella CSV non valida: {percorso}")
+
+
+def _leggi_tabella(percorso, colonne):
+
+
+    print("FILE LETTO:", percorso.resolve())
+    print("DIMENSIONE:", percorso.stat().st_size)
+    print("PRIMI CARATTERI:", repr(percorso.read_text(encoding="utf-8-sig")[:100]))
+
+    with percorso.open("r", encoding="utf-8-sig", newline="") as file:
+
+        prima_riga = file.readline()
+        file.seek(0)
+
+        separatore = ";" if prima_riga.count(";") > prima_riga.count(",") else ","
+
+        reader = csv.DictReader(
+            file,
+            delimiter=separatore,
+            skipinitialspace=True
+        )
+
+        if reader.fieldnames is None:
+            raise ValueError(f"Tabella vuota: {percorso}")
+
+        reader.fieldnames = [
+            nome.strip().replace("\ufeff", "")
+            for nome in reader.fieldnames
+        ]
+
+        if not set(colonne).issubset(reader.fieldnames):
+            raise ValueError(
+                f"Tabella CSV non valida: {percorso}. "
+                f"Colonne lette: {reader.fieldnames}. "
+                f"Colonne richieste: {colonne}"
+            )
+
         return list(reader)
+
+
+
+
+def progetta_sezioni_radiali(dati, tabelle, Z, c):
+    risultati = {}
+    tutte_verificate = True
+
+    tab_dev = tabelle["deviazione"]
+    angoli = [float(x["alpha_deg"]) for x in tab_dev]
+    valori_m = [float(x["m"]) for x in tab_dev]
+    valori_b = [float(x["b"]) for x in tab_dev]
+
+    print("\nPROGETTAZIONE RADIALE - 9 SEZIONI")
+    print("Sezione | Sigma | Curvatura | Incidenza | Deviazione | Calettamento | D")
+
+    for nome, sec in dati["sezioni_radiali"].items():
+        r = sec["radius"]
+        beta1 = sec["beta1"]
+        beta2 = sec["beta2"]
+        sigma = Z * c / (2.0 * math.pi * r)
+
+        if not 0.4 <= sigma <= 2.0:
+            print(f"{nome}: solidita {sigma:.4f} fuori dalle tabelle")
+            return None
+
+        i0 = interpola_2d(tabelle["i0"], beta1, sigma)
+        n = interpola_2d(tabelle["n"], beta1, sigma)
+        delta0 = interpola_2d(tabelle["delta0"], beta1, sigma)
+
+        m = interpola_curva(angoli, valori_m, beta1)
+        b = interpola_curva(angoli, valori_b, beta1)
+
+        theta0 = beta1 - beta2
+
+        i_iniziale = calcola_incidenza_lieblein(
+            theta0, i0, dati["Kti"], dati["Ksh"], n
+        )
+        delta_iniziale = calcola_deviazione_lieblein(
+            theta0, delta0, m, b, sigma, dati["Kdelta_t"]
+        )
+
+        theta1 = curvatura_corretta(
+            beta1, beta2, i_iniziale, delta_iniziale
+        )
+
+        theta, incidenza, deviazione, iterazioni = convergenza_curvatura(
+            theta1, beta1, beta2,
+            i0, dati["Kti"], dati["Ksh"], n,
+            delta0, m, b, sigma, dati["Kdelta_t"],
+            dati["epsilon_theta_deg"], dati["max_iter_theta"]
+        )
+
+        gamma = calcola_calettamento(
+            beta1, beta2, incidenza, deviazione
+        )
+
+        dati_D = {
+            "W1": sec["W1"],
+            "W2": sec["W2"],
+            "beta1": beta1,
+            "beta2": beta2,
+            "sigma_prog": sigma
+        }
+
+        D = calcola_diffusion_factor(dati_D)
+        de_haller = sec["W2"] / sec["W1"]
+
+        verifica = verifica_aerodinamica_finale(
+            D, de_haller, dati["D_max"], dati["de_haller_min"]
+        )
+
+        if not verifica:
+            tutte_verificate = False
+
+        risultati[nome] = {
+            "radius": r,
+            "sigma": sigma,
+            "curvatura_deg": theta,
+            "incidenza_deg": incidenza,
+            "deviazione_deg": deviazione,
+            "calettamento_deg": gamma,
+            "D": D,
+            "de_haller": de_haller,
+            "verifica": verifica
+        }
+
+        print(
+            f"{nome:>5} | {sigma:.3f} | {theta:.3f} | "
+            f"{incidenza:.3f} | {deviazione:.3f} | "
+            f"{gamma:.3f} | {D:.3f}"
+        )
+
+    if not tutte_verificate:
+        print("Verifica radiale NON soddisfatta")
+        return None
+
+    print("TUTTE LE 9 SEZIONI VERIFICATE")
+    return risultati
 
 
 def progetta(dati, tabelle):
@@ -470,29 +621,68 @@ def progetta(dati, tabelle):
     print("Passo effettivo:", round(seff, 4), "m")
     print("Solidita effettiva:", round(sigma_eff, 4))
 
+
+
+
     # INCIDENZA E DEVIAZIONE EFFETTIVE
 
-    i0_eff = interpola_2d(punti_i0, dati["beta1"], sigma_eff)
-    n_eff = interpola_2d(punti_n, dati["beta1"], sigma_eff)
-    delta0_eff = interpola_2d(punti_delta0, dati["beta1"], sigma_eff)
+    # Verifica che la solidita effettiva sia
+    # compresa nel dominio delle tre tabelle.
+    tabelle_sigma = ("i0", "n", "delta0")
 
-    i_eff = calcola_incidenza_lieblein(
-        theta_conv, i0_eff, dati["Kti"], dati["Ksh"], n_eff
+    sigma_min_tab = max(
+        min(p[1] for p in tabelle[nome])
+        for nome in tabelle_sigma
     )
 
-    delta_eff = calcola_deviazione_lieblein(
-        theta_conv, delta0_eff, m, b, sigma_eff, dati["Kdelta_t"]
+    sigma_max_tab = min(
+        max(p[1] for p in tabelle[nome])
+        for nome in tabelle_sigma
     )
 
-    # ANGOLO DI CALETTAMENTO
+    if not sigma_min_tab <= sigma_eff <= sigma_max_tab:
+        print(
+            f"Solidita effettiva {sigma_eff:.4f} "
+            "fuori dal dominio delle tabelle."
+        )
+        return False
 
-    gamma = calcola_calettamento(
-        dati["beta1"], dati["beta2"], i_eff, delta_eff
+    i0_eff = interpola_2d(
+        punti_i0, dati["beta1"], sigma_eff
     )
 
-    print("Incidenza effettiva:", round(i_eff, 3), "gradi")
-    print("Deviazione effettiva:", round(delta_eff, 3), "gradi")
-    print("Angolo di calettamento:", round(gamma, 3), "gradi")
+    n_eff = interpola_2d(
+        punti_n, dati["beta1"], sigma_eff
+    )
+
+    delta0_eff = interpola_2d(
+        punti_delta0, dati["beta1"], sigma_eff
+    )
+
+    # Nuova convergenza con la solidita effettiva
+    theta_eff, i_eff, delta_eff, iter_eff = (
+        convergenza_curvatura(
+            theta_conv,
+            dati["beta1"],
+            dati["beta2"],
+            i0_eff,
+            dati["Kti"],
+            dati["Ksh"],
+            n_eff,
+            delta0_eff,
+            m,
+            b,
+            sigma_eff,
+            dati["Kdelta_t"],
+            dati["epsilon_theta_deg"],
+            dati["max_iter_theta"]
+        )
+    )
+
+    print("Curvatura effettiva:", round(theta_eff, 4))
+    print("Iterazioni effettive:", iter_eff)
+
+
 
     # VERIFICA AERODINAMICA FINALE
 
@@ -502,6 +692,42 @@ def progetta(dati, tabelle):
     D_eff = calcola_diffusion_factor(dati_finali)
 
     de_haller = dati["W2"] / dati["W1"]
+
+
+    # VERIFICA AERODINAMICA RADIALE
+    for nome, sezione in dati["triangles"].items():
+
+        r = sezione["radius"]
+        w1 = sezione["w1"]
+        w2 = sezione["w2"]
+        delta_wu = abs(sezione["c_theta2"])
+
+        sigma_locale = c * Z / (2 * math.pi * r)
+
+        D_locale = (
+            1 - w2 / w1
+            + delta_wu / (2 * sigma_locale * w1)
+        )
+
+        de_haller_locale = w2 / w1
+
+        print(
+            f"{nome}: sigma={sigma_locale:.3f}, "
+            f"D={D_locale:.4f}, "
+            f"DeHaller={de_haller_locale:.4f}"
+        )
+
+        if (
+            not 0 <= D_locale <= dati["D_max"]
+            or de_haller_locale < dati["de_haller_min"]
+        ):
+            print(
+                f"Configurazione non ammissibile "
+                f"alla sezione {nome}"
+            )
+            return False
+
+
 
     verifica = verifica_aerodinamica_finale(
         D_eff,
@@ -518,7 +744,24 @@ def progetta(dati, tabelle):
         print("Solidita effettiva approvata:", sigma_eff)
         print("Corda finale:", round(c, 4), "m")
         print("Numero di pale:", Z)
+
+        gamma = calcola_calettamento(
+            dati["beta1"],
+            dati["beta2"],
+            i_eff,
+            delta_eff
+        )
+
         print("Angolo di calettamento:", round(gamma, 3), "gradi")
+
+
+        profili_radiali = progetta_sezioni_radiali(
+            dati, tabelle, Z, c
+        )
+
+        if profili_radiali is None:
+            return False
+
 
 
         return {
@@ -531,6 +774,7 @@ def progetta(dati, tabelle):
             "stagger_deg": gamma,
             "D_factor": D_eff,
             "de_haller": de_haller,
+            "sezioni_radiali": profili_radiali,
         }
 
 
@@ -598,32 +842,122 @@ def airfoil_design_main(
         ),
     }
 
-    soluzione_trovata = False
+
+    # ==========================================
+    # CICLO AUTOMATICO DELLA SOLIDITA
+    # ==========================================
+
     sigma_iniziale = float(dati_base["sigma_prog"])
     sigma_step = float(dati_base["sigma_step"])
     sigma_max = float(dati_base["sigma_max"])
     max_iter_sigma = int(dati_base["max_iter_sigma"])
-    if sigma_iniziale <= 0 or sigma_step <= 0 or sigma_max < sigma_iniziale:
-        raise ValueError("Limiti di solidita non validi nella configurazione.")
-    if max_iter_sigma < 1:
-        raise ValueError("max_iter_sigma deve essere almeno 1.")
 
-    for tentativo in range(max_iter_sigma):
-        sigma = round(sigma_iniziale + tentativo * sigma_step, 6)
-        if sigma > sigma_max:
-            break
+    # Dominio comune delle tabelle di Lieblein
+    nomi_tabelle = ("i0", "n", "delta0")
+
+    sigma_min_tab = max(
+        min(p[1] for p in tabelle[nome])
+        for nome in nomi_tabelle
+    )
+
+    sigma_max_tab = min(
+        max(p[1] for p in tabelle[nome])
+        for nome in nomi_tabelle
+    )
+
+    # Verifica degli input
+    if sigma_step <= 0:
+        raise ValueError("sigma_step deve essere positivo")
+
+    if not sigma_min_tab <= sigma_iniziale <= sigma_max_tab:
+        raise ValueError(
+            f"Solidita iniziale fuori dal dominio "
+            f"[{sigma_min_tab}, {sigma_max_tab}]"
+        )
+
+    if not sigma_iniziale <= sigma_max <= sigma_max_tab:
+        raise ValueError(
+            f"sigma_max non valido. "
+            f"Dominio massimo: {sigma_max_tab}"
+        )
+
+    # Verifica del dominio angolare per m e b
+    angoli_mb = [
+        float(r["alpha_deg"])
+        for r in tabelle["deviazione"]
+    ]
+
+    beta1 = float(dati_base["beta1"])
+
+    if not min(angoli_mb) <= beta1 <= max(angoli_mb):
+        raise ValueError(
+            f"Angolo beta1={beta1:.2f} fuori "
+            "dal dominio della tabella m,b"
+        )
+
+    # Numero di tentativi necessario
+    n_necessari = (
+        math.floor(
+            (sigma_max - sigma_iniziale) / sigma_step
+            + 1e-9
+        ) + 1
+    )
+
+    if max_iter_sigma < n_necessari:
+        raise ValueError(
+            f"max_iter_sigma insufficiente: "
+            f"servono {n_necessari} tentativi"
+        )
+
+    # Ricerca della prima soluzione ammissibile
+    for tentativo in range(n_necessari):
+
+        sigma = round(
+            sigma_iniziale + tentativo * sigma_step, 6
+        )
 
         dati_tentativo = dict(dati_base)
         dati_tentativo["sigma_prog"] = sigma
 
-        print("Tentativo:", tentativo + 1, "Solidita:", sigma)
+        print(
+            f"\nTentativo {tentativo + 1}: "
+            f"solidita = {sigma:.4f}"
+        )
 
-        risultato = progetta(dati_tentativo, tabelle)
+        try:
+            risultato = progetta(
+                dati_tentativo, tabelle
+            )
+
+        except ValueError as errore:
+            # Solo la mancata convergenza della
+            # curvatura consente un nuovo tentativo.
+            if (
+                "Convergenza della curvatura non raggiunta"
+                in str(errore)
+            ):
+                print(f"Tentativo scartato: {errore}")
+                continue
+
+            # Altri errori richiedono correzione.
+            raise
 
         if risultato:
+            print(
+                f"\nSOLUZIONE TROVATA "
+                f"con sigma = {sigma:.4f}"
+            )
             return risultato
 
-    raise ValueError("Nessuna soluzione trovata nei limiti di solidita")
+        print("Tentativo scartato: vincoli non soddisfatti")
+
+    raise ValueError(
+        "Nessuna soluzione aerodinamicamente "
+        "ammissibile nell'intervallo di solidita "
+        f"[{sigma_iniziale}, {sigma_max}]."
+    )
+
+
 
 
 def esegui_airfoil(dati: Mapping[str, object]) -> bool:
