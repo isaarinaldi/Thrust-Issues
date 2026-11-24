@@ -452,7 +452,7 @@ def progetta_sezioni_radiali(dati, tabelle, Z, c):
         beta2 = sec["beta2"]
         sigma = Z * c / (2.0 * math.pi * r)
 
-        if not 0.4 <= sigma <= 2.0:
+        if not 0.25 <= sigma <= 2.0:
             print(f"{nome}: solidita {sigma:.4f} fuori dalle tabelle")
             return None
 
@@ -640,7 +640,7 @@ def progetta(dati, tabelle):
         for nome in tabelle_sigma
     )
 
-    if not sigma_min_tab <= sigma_eff <= sigma_max_tab:
+    if not 0.25 <= sigma_eff <= sigma_max_tab:
         print(
             f"Solidita effettiva {sigma_eff:.4f} "
             "fuori dal dominio delle tabelle."
@@ -869,7 +869,7 @@ def airfoil_design_main(
     if sigma_step <= 0:
         raise ValueError("sigma_step deve essere positivo")
 
-    if not sigma_min_tab <= sigma_iniziale <= sigma_max_tab:
+    if not 0.25 <= sigma_iniziale <= sigma_max_tab:
         raise ValueError(
             f"Solidita iniziale fuori dal dominio "
             f"[{sigma_min_tab}, {sigma_max_tab}]"

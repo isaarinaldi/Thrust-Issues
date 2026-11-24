@@ -64,13 +64,15 @@ airfoil:
   Kdelta_t: 1.0
 
   # Convergenza della curvatura
-  epsilon_theta_deg: 0.001
+  epsilon_theta_deg: 0.01
   max_iter_theta: 100
 
   # Dimensionamento geometrico
   AR: 2.2
 
   # Ciclo esterno della solidita
+
   sigma_step: 0.02
   sigma_max: 2.0
-  max_iter_sigma: 81
+  max_iter_sigma: 86
+

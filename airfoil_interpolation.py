@@ -22,4 +22,18 @@ def interpola_2d(punti, angolo, sigma):
         valore = interpola_curva(angoli, risultati, angolo)
         valori.append(valore)
 
+
+    if sigma < solidita[0]:
+        if sigma < 0.25:
+            raise ValueError(
+                "Solidita troppo bassa per l'estrapolazione"
+            )
+
+        return valori[0] + (
+            (sigma - solidita[0])
+            * (valori[1] - valori[0])
+            / (solidita[1] - solidita[0])
+        )
+
     return interpola_curva(solidita, valori, sigma)
+
